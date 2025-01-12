@@ -3,6 +3,22 @@ export type CloudAuthUser = {
   email?: string;
 } | null;
 
+export type Position = {
+  x: number;
+  y: number;
+};
+
+export type PolarPosition = {
+  r: number;    // radius
+  theta: number; // angle in radians
+};
+
+export type SpatialState = {
+  position: PolarPosition;
+  lastActive: number;
+  cohered: boolean;
+};
+
 export type User = {
   id: string;
   username: string | null;
@@ -17,8 +33,8 @@ export type Message = {
 };
 
 export type ChatDocument = {
-  messages: Message[];
   users: User[];
+  messages: Message[];
 };
 
 // Create an SHA256 hash of a string
@@ -44,3 +60,22 @@ export const formatDate = (timestamp: number) =>
     timeStyle: 'short',
     dateStyle: 'medium'
   }).format(new Date(timestamp));
+
+export const cartesianToPolar = (x: number, y: number): PolarPosition => {
+  const r = Math.sqrt(x * x + y * y);
+  const theta = Math.atan2(y, x);
+  return { r, theta };
+};
+
+export const polarToCartesian = (r: number, theta: number): Position => {
+  const x = r * Math.cos(theta);
+  const y = r * Math.sin(theta);
+  return { x, y };
+};
+
+// Normalize angle to be between -π and π
+export const normalizeAngle = (angle: number): number => {
+  while (angle > Math.PI) angle -= 2 * Math.PI;
+  while (angle < -Math.PI) angle += 2 * Math.PI;
+  return angle;
+};
