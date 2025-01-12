@@ -14,23 +14,10 @@
   } from '@featherscloud/auth';
 
   import type { ChatDocument, CloudAuthUser, Message, User, Position, PolarPosition, SpatialState } from './utils.js';
-  import { formatDate, sha256, cartesianToPolar, polarToCartesian, normalizeAngle, lerpPolar } from './utils.js';
+  import { formatDate, sha256, cartesianToPolar, polarToCartesian, normalizeAngle } from './utils.js';
   import { afterUpdate, onMount, onDestroy } from 'svelte';
   import { slide } from 'svelte/transition';
   import { writable, type Writable } from 'svelte/store';
-  import { hudStore, clickRingsStore, debugStore, spatialStore } from './stores.js';
-
-  // Import our components
-  import {
-    UserAuth,
-    Chat,
-    GameMap,
-    SchemaWindow,
-    DebugPanel,
-    HUD,
-    Trade,
-    Beacon
-  } from './components';
 
   // Initialize Feathers Cloud Auth
   const appId = import.meta.env.VITE_CLOUD_APP_ID as string;
@@ -45,36 +32,17 @@
   const automergeUrl = import.meta.env.VITE_AUTOMERGE_URL as AnyDocumentId;
   const handle = repo.find<ChatDocument>(automergeUrl);
 
-  // Application state
   let ready = false;
   let cloudAuthUser: CloudAuthUser | null = null;
   let user: User | null = null;
-<<<<<<< Updated upstream
   let messages: Message[] = [];
-  let text = '';  // Chat input text
-  let users: Array<{
-    id: string;
-    username: string;
-    avatar?: string;
-    position?: { x: number; y: number };
-    lastActive?: number;
-    connected?: boolean;
-    cohered?: boolean;
-  }> = [];
-=======
   let users: User[] = [];
-  let messages: Message[] = [];
   let text: string = '';
-  let chatOpen = true;
->>>>>>> Stashed changes
 
-  // Game state
-  let gameHasFocus = false;
-  let centerX = 0;
-  let centerY = 0;
-  let animationFrame: number | null = null;
   let playerSpeed = 5;
   let keys = new Set<string>();
+
+  let gameHasFocus = false;
 
   // Current position for lerping (in polar coordinates)
   let currentR = 0;
@@ -83,130 +51,38 @@
   let targetTheta = 0;
   const lerpSpeed = 0.15; // Adjust this to change movement speed
 
-<<<<<<< Updated upstream
   let centerX = window.innerWidth / 2;
   let centerY = window.innerHeight / 2;
   let animationFrame: number | null = null;
 
-  // Click ring management
   interface ClickRing {
-    id: string;
     x: number;
     y: number;
-    createdAt: number;
+    timestamp: number;
   }
 
   const clickRingsStore = writable<ClickRing[]>([]);
   const chatVisible = writable(true);
-  const spatialStore = writable<Record<string, SpatialState>>({});
-  const connectedUsers = writable<Array<{
-    id: string;
-    username: string;
-    avatar?: string;
-    position?: { x: number; y: number };
-    lastActive?: number;
-    connected?: boolean;
-    cohered?: boolean;
-  }>>([]);
+  const spatialStore: Writable<Record<string, SpatialState>> = writable({});
 
-  const addClickRing = (x: number, y: number) => {
-    const ring: ClickRing = {
-      id: crypto.randomUUID(),
-      x,
-      y,
-      createdAt: Date.now()
-    };
-    clickRingsStore.update(rings => [...rings, ring]);
+  let clickRings: ClickRing[] = [];
+  clickRingsStore.subscribe(value => {
+    clickRings = value;
+  });
 
-    // Remove ring after animation
-    setTimeout(() => {
-      clickRingsStore.update(rings => rings.filter(r => r.id !== ring.id));
-    }, 500);
-  };
-
-  // Clean up old click rings periodically
-  setInterval(() => {
-    clickRingsStore.update(rings => 
-      rings.filter(ring => Date.now() - ring.createdAt < 1000)
-    );
-  }, 1000);
-
-  interface SpatialState {
-    cohered: boolean;
-    position?: { x: number; y: number };
-    lastActive?: number;
-  }
-
-  interface UserState {
-    username: string;
-    avatar?: string;
-    position?: { x: number; y: number };
-    lastActive?: number;
-    connected?: boolean;
-    cohered?: boolean;
-  }
-
-  interface HUDStore {
+  // HUD State
+  const hudStore = writable({
+    mouseCartesian: { x: 0, y: 0 },
+    mousePolar: { r: 0, theta: 0 },
     userState: {
-      cohered: boolean;
-      lastActive: number;
-      lastMessage: number;
-    };
-    performance: {
-      fps: number;
-    };
-    users: Record<string, UserState>;
-    mouseCartesian: { x: number; y: number };
-    mousePolar: { r: number; theta: number };
-  }
-
-  const hudStore = writable<HUDStore>({
-    userState: {
-      cohered: false,
+      cohered: true,
       lastActive: Date.now(),
       lastMessage: Date.now()
     },
     performance: {
       fps: 0
-    },
-    users: {},
-    mouseCartesian: { x: 0, y: 0 },
-    mousePolar: { r: 0, theta: 0 }
+    }
   });
-
-  // Update users when spatial state changes
-  $: {
-    if ($spatialStore) {
-      users = Object.entries($spatialStore).map(([id, state]) => ({
-        id,
-        username: state.username || 'Anonymous',
-        avatar: state.avatar,
-        position: state.position,
-        lastActive: state.lastActive,
-        connected: state.connected,
-        cohered: state.cohered
-      }));
-    }
-  }
-
-  // Sort users by coherence status
-  $: sortedUsers = users.sort((a, b) => {
-    if (a.cohered === b.cohered) {
-      return a.username.localeCompare(b.username);
-    }
-    return a.cohered ? -1 : 1;
-  });
-
-  // Update user function
-  const updateUser = (userId: string, userData: Partial<UserState>) => {
-    const userIndex = users.findIndex(u => u.id === userId);
-    if (userIndex >= 0) {
-      users[userIndex] = { ...users[userIndex], ...userData };
-      users = users; // Trigger reactivity
-    } else {
-      users = [...users, { id: userId, ...userData } as UserState];
-    }
-  };
 
   // Visual state store (for smooth animations)
   const visualStore = writable<Record<string, {
@@ -236,80 +112,33 @@
     const theta = startTheta + deltaTheta * t;
     const r = start.r * (1 - t) + end.r * t;
     
-=======
-  // Coordinate conversion helpers
-  const cartesianToPolar = (x: number, y: number) => {
-    const r = Math.sqrt(x * x + y * y);
-    const theta = Math.atan2(y, x);
->>>>>>> Stashed changes
     return { r, theta };
   };
 
-  const polarToCartesian = (r: number, theta: number) => {
-    const x = r * Math.cos(theta);
-    const y = r * Math.sin(theta);
-    return { x, y };
+  const lerp = (start: number, end: number, t: number): number => {
+    return start * (1 - t) + end * t;
   };
 
-  // Update center point
-  const updateCenterPoint = () => {
-    centerX = window.innerWidth / 2;
-    centerY = window.innerHeight / 2;
-  };
-
-  // Mouse position tracking
   const handleMouseMove = (event: MouseEvent) => {
+    // Only update HUD, no movement
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left - centerX;
     const y = event.clientY - rect.top - centerY;
     const polar = cartesianToPolar(x, y);
-
+    
     hudStore.update(state => ({
       ...state,
       mouseCartesian: { x, y },
       mousePolar: polar
     }));
-  };
 
-  // Game click handler
-  const handleGameClick = (event: MouseEvent) => {
-    if (!user) return;
-    
-    const rect = event.currentTarget.getBoundingClientRect();
-    const clickX = event.clientX - rect.left - centerX;
-    const clickY = event.clientY - rect.top - centerY;
-    
-    // Add click ring
-    clickRingsStore.update(rings => [...rings, { x: event.clientX, y: event.clientY, timestamp: Date.now() }]);
-    
-    // Remove old rings after animation
-    setTimeout(() => {
-      clickRingsStore.update(rings => rings.filter(ring => ring.timestamp !== Date.now()));
-    }, 500);
-    
-    // Update user position
-    const polarPos = cartesianToPolar(clickX, clickY);
-    spatialStore.update(state => ({
-      ...state,
-      [user.id]: {
-        position: polarPos,
-        lastActive: Date.now(),
-        cohered: true
-      }
-    }));
-  };
-
-  // Game focus handlers
-  const handleGameFocus = () => {
-    gameHasFocus = true;
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-  };
-
-  const handleGameBlur = () => {
-    gameHasFocus = false;
-    window.removeEventListener('keydown', handleKeyDown);
-    window.removeEventListener('keyup', handleKeyUp);
+    // Debounced activity update
+    let moveTimeout: number | null = null;
+    if (moveTimeout) clearTimeout(moveTimeout);
+    moveTimeout = setTimeout(() => {
+      handleUserInteraction();
+      moveTimeout = null;
+    }, 1000) as unknown as number;
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -320,19 +149,37 @@
     keys.delete(event.key.toLowerCase());
   };
 
-  // User display helpers
-  const userDisplayClass = (userId: string) => {
-    if (!$spatialStore[userId]) return '';
-    return $spatialStore[userId].cohered ? 'cohered' : 'decohered';
+  const updatePlayerPosition = () => {
+    if (!user) return;
+    
+    const currentPos = getUserPosition(user);
+    let newX = currentPos.x;
+    let newY = currentPos.y;
+
+    // WASD or Arrow keys
+    if (keys.has('w') || keys.has('arrowup')) newY -= playerSpeed;
+    if (keys.has('s') || keys.has('arrowdown')) newY += playerSpeed;
+    if (keys.has('a') || keys.has('arrowleft')) newX -= playerSpeed;
+    if (keys.has('d') || keys.has('arrowright')) newX += playerSpeed;
+
+    // Keep player in bounds
+    newX = Math.max(0, Math.min(window.innerWidth - 50, newX));
+    newY = Math.max(0, Math.min(window.innerHeight - 50, newY));
+
+    if (newX !== currentPos.x || newY !== currentPos.y) {
+      updatePosition(newX, newY);
+    }
   };
 
-  const getUserPosition = (user: User) => {
-    if (!$spatialStore[user.id]) return { x: 0, y: 0 };
-    const polar = $spatialStore[user.id].position;
-    return polarToCartesian(polar.r, polar.theta);
+  const handleGameClick = (event: MouseEvent) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const clickX = event.clientX - rect.left;
+    const clickY = event.clientY - rect.top;
+    
+    addClickRing(clickX, clickY);
+    handleUserInteraction();
   };
 
-<<<<<<< Updated upstream
   // Initialize visual state for a user
   const initVisualState = (userId: string, r: number = 0, theta: number = 0) => {
     visualStore.update(state => ({
@@ -438,6 +285,7 @@
       [userId]: {
         position: { x: 0, y: 0 },
         lastActive: Date.now(),
+        connected: false,
         cohered: false
       }
     }));
@@ -564,16 +412,14 @@
 
   // Get user position from spatial store
   const getUserPosition = (user: User): Position => {
-    const spatial = $spatialStore[user.id];
-    if (!spatial) return { x: 0, y: 0 };
-    return spatial.position || { x: 0, y: 0 };
+    return { x: 0, y: 0 };
   };
 
   // Coherence check functions
   const COHERENCE_TIMEOUT = 15 * 60 * 1000; // 15 minutes in milliseconds
 
-  const isUserCohered = (userId: string): boolean => {
-    const spatial = $spatialStore[userId];
+  const isUserCohered = (user: User): boolean => {
+    const spatial = $spatialStore[user.id];
     if (!spatial) return false;
     
     const now = Date.now();
@@ -582,7 +428,7 @@
     // User must have both:
     // 1. Active websocket connection
     // 2. Recent activity within timeout
-    return spatial.cohered;
+    return spatial.connected && timeSinceActive < COHERENCE_TIMEOUT;
   };
 
   // Track websocket connections
@@ -600,7 +446,8 @@
       ...state,
       [userId]: {
         ...state[userId],
-        cohered: connected
+        connected,
+        cohered: connected && (Date.now() - state[userId].lastActive < COHERENCE_TIMEOUT)
       }
     }));
   };
@@ -613,7 +460,7 @@
       [userId]: {
         ...state[userId],
         lastActive: now,
-        cohered: true
+        cohered: state[userId].connected && true // If connected, activity makes them cohered
       }
     }));
 
@@ -647,7 +494,7 @@
         
         // Move to center if decohered
         if (!isActive) {
-          spatial.position = { x: 0, y: 0 };
+          spatial.position = { r: 0, theta: 0 };
         }
       }
       return newState;
@@ -670,186 +517,120 @@
   });
 
   // Update the user display with coherence classes
-  const userDisplayClass = (userId: string): string => {
-    const user = $connectedUsers.find(u => u.id === userId);
-    if (!user) return 'decohered';
-    return user.cohered ? 'cohered' : 'decohered';
-=======
-  // Format helpers
-  const formatDegrees = (radians: number) => {
-    const degrees = (radians * 180 / Math.PI).toFixed(1);
-    return `${degrees}°`;
->>>>>>> Stashed changes
+  $: userDisplayClass = (userId: string) => {
+    const spatial = $spatialStore[userId];
+    if (!spatial) return 'decohered';
+    return spatial.cohered ? 'cohered' : 'decohered';
+  };
+
+  const addClickRing = (x: number, y: number) => {
+    clickRingsStore.update(rings => [
+      ...rings,
+      {
+        x,
+        y,
+        timestamp: Date.now()
+      }
+    ]);
+
+    // Remove ring after animation
+    setTimeout(() => {
+      clickRingsStore.update(rings => rings.slice(1));
+    }, 500);
   };
 
   const getTimeSince = (timestamp: number) => {
-    const delta = Date.now() - timestamp;
-    if (delta < 1000) return '0s';
-    const seconds = Math.floor(delta / 1000);
+    const diff = Date.now() - timestamp;
+    const seconds = Math.floor(diff / 1000);
     if (seconds < 60) return `${seconds}s`;
     const minutes = Math.floor(seconds / 60);
     return `${minutes}m ${seconds % 60}s`;
   };
 
-  // Game loop
-  const gameLoop = () => {
-    if (user && $spatialStore[user.id]) {
-      // Update user activity
-      spatialStore.update(state => ({
-        ...state,
-        [user.id]: {
-          ...state[user.id],
-          lastActive: Date.now()
-        }
-      }));
+  const formatDegrees = (radians: number) => {
+    return `${Math.round(radians * (180 / Math.PI))}°`;
+  };
+
+  const RADIAL_DIVISIONS = 23;
+
+  const generateRadialGrid = () => {
+    const lines = [];
+    for (let i = 0; i < RADIAL_DIVISIONS; i++) {
+      const angle = (i * 2 * Math.PI) / RADIAL_DIVISIONS;
+      lines.push(angle);
     }
-    animationFrame = requestAnimationFrame(gameLoop);
+    return lines;
   };
 
   onMount(() => {
-    init();
     updateCenterPoint();
     window.addEventListener('resize', updateCenterPoint);
     
+    // Set initial position to center
+    if (user && !user.position) {
+      currentR = 0;
+      currentTheta = 0;
+      targetR = 0;
+      targetTheta = 0;
+      updatePosition(0, 0);
+    }
+
+    const gameContainer = document.querySelector('.game-container');
+    if (gameContainer) {
+      gameContainer.focus();
+      
+      // Refocus on game container when clicking anywhere in it
+      gameContainer.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // Prevent default to ensure focus works
+        gameContainer.focus();
+      });
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    // Start game loop
+    animationFrame = window.requestAnimationFrame(gameLoop);
+
     return () => {
       window.removeEventListener('resize', updateCenterPoint);
-      if (animationFrame) {
-        cancelAnimationFrame(animationFrame);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      if (gameContainer) {
+        gameContainer.removeEventListener('mousedown', () => {
+          gameContainer.focus();
+        });
+      }
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
       }
     };
   });
 
-  // Initialize application
-  const init = async () => {
-    try {
-      // Get Feathers Cloud Auth access token
-      const accessToken = await auth.getAccessToken();
-      if (!accessToken) {
-        window.location.href = await auth.getLoginUrl();
-        return;
-      }
-
-      // Verify token and get user info
-      const { user: verifiedUser } = await verifier.verify(accessToken);
-      if (!verifiedUser) {
-        window.location.href = await auth.getLoginUrl();
-        return;
-      }
-
-      cloudAuthUser = verifiedUser;
-
-      // Wait for handle to be ready
-      const doc = await new Promise((resolve) => {
-        if (handle.isReady()) {
-          resolve(handle.doc());
-        } else {
-          handle.on('ready', () => {
-            resolve(handle.doc());
-          });
-        }
-      });
-
-      // Initialize document if needed
-      if (!doc.users || !doc.messages) {
-        await handle.change(doc => {
-          if (!doc.users) doc.users = [];
-          if (!doc.messages) doc.messages = [];
-        });
-      }
-
-      // Load initial document state
-      users = doc.users;
-      messages = doc.messages;
-
-      // Create our user if they don't exist
-      const emailHash = await sha256(verifiedUser.email || 'unknown');
-      const existingUser = users.find(u => u.id === verifiedUser.id);
-
-      if (!existingUser) {
-        await handle.change(doc => {
-          doc.users.push({
-            id: verifiedUser.id,
-            username: verifiedUser.email.split('@')[0],
-            avatar: `https://www.gravatar.com/avatar/${emailHash}?s=40&d=identicon&r=g`,
-            position: getDefaultPosition(),
-            lastActive: Date.now()
-          });
-        });
-      } else {
-        user = existingUser;
-      }
-
-      // Subscribe to document changes
-      handle.on('change', ({ doc }) => {
-        if (doc) {
-          users = doc.users;
-          messages = doc.messages;
-          
-          // Update user reference if needed
-          if (!user && cloudAuthUser) {
-            user = doc.users.find(u => u.id === cloudAuthUser.id) || null;
-          }
-          
-          // Initialize spatial states
-          spatialStore.update(state => {
-            const newState = { ...state };
-            users.forEach(u => {
-              if (!newState[u.id]) {
-                newState[u.id] = {
-                  position: { r: 0, theta: 0 },
-                  lastActive: Date.now(),
-                  cohered: true
-                };
-              }
-            });
-            return newState;
-          });
-        }
-      });
-
-      ready = true;
-      
-      // Start game loop
-      gameLoop();
-
-    } catch (error) {
-      if (error instanceof LoginRequiredError) {
-        window.location.href = await auth.getLoginUrl(error);
-      } else {
-        console.error('Failed to initialize:', error);
-        throw error;
-      }
-    }
-  };
-
   onDestroy(() => {
-    // Cleanup any subscriptions or intervals
-  });
-
-  // Store initialization
-  hudStore.set({
-    mouseCartesian: { x: 0, y: 0 },
-    mousePolar: { r: 0, theta: 0 },
-    userState: {
-      cohered: false,
-      lastActive: Date.now(),
-      lastMessage: Date.now()
+    if (animationFrame !== null) {
+      window.cancelAnimationFrame(animationFrame);
     }
   });
 
-  clickRingsStore.set([]);
-
-  debugStore.set({
-    lastUpdate: Date.now(),
-    messages: [],
-    userCount: 0,
-    spatialStates: {}
+  afterUpdate(() => {
+    // Don't auto-scroll
   });
 
-  spatialStore.set({});
+  const getUserById = (id: string) => users.find((user) => user.id === id);
 
-<<<<<<< Updated upstream
   init();
+
+  // Sort users by coherence status
+  $: sortedUsers = users.sort((a, b) => {
+    const aActive = isUserCohered(a);
+    const bActive = isUserCohered(b);
+    if (aActive === bActive) {
+      // If same coherence status, sort by username
+      return a.username.localeCompare(b.username);
+    }
+    // Active users first
+    return aActive ? -1 : 1;
+  });
 
   // Scroll chat to bottom
   const scrollToBottom = () => {
@@ -870,266 +651,6 @@
   onMount(() => {
     scrollToBottom();
   });
-
-  // WebSocket message handlers
-  const handleWebSocketMessage = (event: MessageEvent) => {
-    const message = JSON.parse(event.data);
-    
-    switch (message.type) {
-      case 'spatial_sync':
-        handleSpatialSync(message.data);
-        break;
-
-      case 'user_update':
-        connectedUsers.update(users => {
-          const userIndex = users.findIndex(u => u.id === message.data.userId);
-          if (userIndex >= 0) {
-            users[userIndex] = { ...users[userIndex], ...message.data.state };
-            return [...users];
-          }
-          return users;
-        });
-        break;
-
-      case 'user_joined':
-        connectedUsers.update(users => {
-          if (!users.find(u => u.id === message.data.userId)) {
-            return [...users, {
-              id: message.data.userId,
-              username: message.data.username,
-              avatar: message.data.avatar,
-              connected: true,
-              cohered: true,
-              lastActive: Date.now()
-            }];
-          }
-          return users;
-        });
-        break;
-
-      case 'user_left':
-        connectedUsers.update(users => 
-          users.filter(u => u.id !== message.data.userId)
-        );
-        break;
-
-      // ... existing message handlers ...
-    }
-  };
-
-  // Initialize spatial state
-  let spatialState: Record<string, {
-    username: string;
-    avatar?: string;
-    position?: { x: number; y: number };
-    lastActive?: number;
-    connected?: boolean;
-    cohered?: boolean;
-  }> = {};
-
-  // Update spatial state from WebSocket
-  const updateSpatialState = (state: typeof spatialState) => {
-    spatialState = state;
-  };
-
-  // Handle spatial state sync message
-  const handleSpatialSync = (data: any) => {
-    updateSpatialState(data);
-  };
-
-  // Debug logging system
-  interface DebugEvent {
-    id: string;
-    type: 'beacon' | 'trade' | 'system' | 'error';
-    message: string;
-    timestamp: string;
-    details?: any;
-  }
-
-  const debugTimeline = writable<DebugEvent[]>([]);
-  let showDebugPanel = true;
-
-  const logDebug = (type: DebugEvent['type'], message: string, details?: any) => {
-    debugTimeline.update(events => {
-      const newEvent = {
-        id: crypto.randomUUID(),
-        type,
-        message,
-        timestamp: new Date().toISOString(),
-        details
-      };
-      // Keep last 100 events
-      return [...events.slice(-99), newEvent];
-    });
-  };
-
-  const toggleDebugPanel = () => {
-    showDebugPanel = !showDebugPanel;
-  };
-
-  // Add new state for beacons and trades
-  let activeBeacons: Map<string, typeof schemas.Beacon> = new Map();
-  let activeTrades: Map<string, typeof schemas.Trade> = new Map();
-
-  // Functions for beacon management
-  const createBeacon = (position: { x: number, y: number }) => {
-    if (!user) return;
-    
-    const beacon = {
-      id: crypto.randomUUID(),
-      creatorId: user.id,
-      position,
-      createdAt: new Date().toISOString(),
-      active: true,
-      participants: [user.id]
-    };
-    activeBeacons.set(beacon.id, beacon);
-    
-    // Log to debug timeline
-    logDebug('beacon', `Created beacon at [${position.x.toFixed(2)}, ${position.y.toFixed(2)}]`, {
-      beacon,
-      creator: user.username,
-      timestamp: beacon.createdAt
-    });
-
-    // Send to chat
-    sendMessage(`*${user.username} set a beacon at [${position.x.toFixed(2)}, ${position.y.toFixed(2)}]`);
-    
-    // Trigger WebSocket sync
-    ws.send(JSON.stringify({ type: 'beacon_created', data: beacon }));
-  };
-
-  // Join beacon function with debug logging
-  const joinBeacon = (beaconId: string) => {
-    const beacon = activeBeacons.get(beaconId);
-    if (beacon && !beacon.participants.includes(user?.id)) {
-      logDebug('beacon', `Joining beacon created by ${users.get(beacon.creatorId)?.username}`, {
-        beaconId,
-        joiner: users.get(user?.id)?.username,
-        position: beacon.position
-      });
-
-      ws.send(JSON.stringify({
-        type: 'beacon_joined',
-        data: { beaconId, userId: user?.id }
-      }));
-    }
-  };
-
-  // Functions for trade management
-  const initiateTrade = (position: { x: number, y: number }, targetUserId: string) => {
-    const trade = {
-      id: crypto.randomUUID(),
-      initiatorId: user?.id,
-      acceptorId: targetUserId,
-      state: 'invited',
-      position,
-      mousePositions: {},
-      rulesAccepted: { [user?.id]: false, [targetUserId]: false },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    activeTrades.set(trade.id, trade);
-    // Trigger WebSocket sync
-    // ws.send(JSON.stringify({ type: 'trade_initiated', data: trade }));
-  };
-
-  const updateTradeMousePosition = (tradeId: string, position: { x: number, y: number }) => {
-    const trade = activeTrades.get(tradeId);
-    if (trade) {
-      trade.mousePositions[user?.id] = position;
-      trade.updatedAt = new Date().toISOString();
-      activeTrades.set(trade.id, trade);
-      // Trigger WebSocket sync
-      // ws.send(JSON.stringify({ 
-      //   type: 'trade_mouse_update', 
-      //   data: { tradeId, userId: user?.id, position } 
-      // }));
-    }
-  };
-
-  const acceptTradeRules = (tradeId: string) => {
-    const trade = activeTrades.get(tradeId);
-    if (trade) {
-      trade.rulesAccepted[user?.id] = true;
-      trade.updatedAt = new Date().toISOString();
-      if (Object.values(trade.rulesAccepted).every(accepted => accepted)) {
-        trade.state = 'trading';
-      }
-      activeTrades.set(trade.id, trade);
-      // Trigger WebSocket sync
-      // ws.send(JSON.stringify({ 
-      //   type: 'trade_rules_accepted', 
-      //   data: { tradeId, userId: user?.id } 
-      // }));
-    }
-  };
-
-  // Add context menu state
-  let contextMenu = {
-    visible: false,
-    x: 0,
-    y: 0,
-    targetUserId: null as string | null
-  };
-
-  // Handle right click on map
-  const handleContextMenu = (event: MouseEvent) => {
-    event.preventDefault();
-    const target = event.target as HTMLElement;
-    const userElement = target.closest('[data-user-id]');
-    
-    contextMenu = {
-      visible: true,
-      x: event.clientX,
-      y: event.clientY,
-      targetUserId: userElement?.getAttribute('data-user-id') || null
-    };
-  };
-
-  // Hide context menu when clicking outside
-  const handleClick = (e: MouseEvent) => {
-    if (contextMenu.visible) {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.context-menu')) {
-        contextMenu.visible = false;
-      }
-    }
-  };
-
-  // Chat input handlers
-  const handleChatKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      if (text.trim()) {
-        sendMessage(text.trim());
-        text = '';
-      }
-    }
-  };
-
-  const sendMessage = (content: string) => {
-    if (!user) return;
-
-    const message = {
-      id: crypto.randomUUID(),
-      userId: user.id,
-      text: content,
-      createdAt: new Date().toISOString()
-    };
-
-    messages = [...messages, message];
-    scrollToBottom();
-
-    // Send to WebSocket
-    ws.send(JSON.stringify({
-      type: 'chat_message',
-      data: message
-    }));
-
-    // Update user activity
-    updateUserActivity(user.id);
-  };
 
   // Schema documentation
   const schemas = {
@@ -1245,45 +766,193 @@
     isDragging = false;
   };
 
-  // Removed duplicate addClickRing function
-=======
-  // Store reactivity
-  $: if (ready) {
-    debugStore.update(() => ({
-      lastUpdate: Date.now(),
-      messages: messages.slice(-5),
-      userCount: users.length,
-      spatialStates: $spatialStore
+  // Add new state for beacons and trades
+  let activeBeacons: Map<string, typeof schemas.Beacon> = new Map();
+  let activeTrades: Map<string, typeof schemas.Trade> = new Map();
+
+  // Functions for beacon management
+  const createBeacon = (position: { x: number, y: number }) => {
+    const beacon = {
+      id: crypto.randomUUID(),
+      creatorId: user?.id,
+      position,
+      createdAt: new Date().toISOString(),
+      active: true,
+      participants: [user?.id]
+    };
+    activeBeacons.set(beacon.id, beacon);
+    // Trigger WebSocket sync
+    // ws.send(JSON.stringify({ type: 'beacon_created', data: beacon }));
+  };
+
+  // Functions for trade management
+  const initiateTrade = (position: { x: number, y: number }, targetUserId: string) => {
+    const trade = {
+      id: crypto.randomUUID(),
+      initiatorId: user?.id,
+      acceptorId: targetUserId,
+      state: 'invited',
+      position,
+      mousePositions: {},
+      rulesAccepted: { [user?.id]: false, [targetUserId]: false },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    activeTrades.set(trade.id, trade);
+    // Trigger WebSocket sync
+    // ws.send(JSON.stringify({ type: 'trade_initiated', data: trade }));
+  };
+
+  const updateTradeMousePosition = (tradeId: string, position: { x: number, y: number }) => {
+    const trade = activeTrades.get(tradeId);
+    if (trade) {
+      trade.mousePositions[user?.id] = position;
+      trade.updatedAt = new Date().toISOString();
+      activeTrades.set(trade.id, trade);
+      // Trigger WebSocket sync
+      // ws.send(JSON.stringify({ 
+      //   type: 'trade_mouse_update', 
+      //   data: { tradeId, userId: user?.id, position } 
+      // }));
+    }
+  };
+
+  const acceptTradeRules = (tradeId: string) => {
+    const trade = activeTrades.get(tradeId);
+    if (trade) {
+      trade.rulesAccepted[user?.id] = true;
+      trade.updatedAt = new Date().toISOString();
+      if (Object.values(trade.rulesAccepted).every(accepted => accepted)) {
+        trade.state = 'trading';
+      }
+      activeTrades.set(trade.id, trade);
+      // Trigger WebSocket sync
+      // ws.send(JSON.stringify({ 
+      //   type: 'trade_rules_accepted', 
+      //   data: { tradeId, userId: user?.id } 
+      // }));
+    }
+  };
+
+  // Add context menu state
+  let contextMenu = {
+    visible: false,
+    x: 0,
+    y: 0,
+    targetUserId: null as string | null
+  };
+
+  // Handle right click on map
+  const handleContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    const target = e.target as HTMLElement;
+    const userElement = target.closest('[data-user-id]');
+    
+    contextMenu = {
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      targetUserId: userElement?.getAttribute('data-user-id') || null
+    };
+  };
+
+  // Hide context menu when clicking outside
+  const handleClick = (e: MouseEvent) => {
+    if (contextMenu.visible) {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.context-menu')) {
+        contextMenu.visible = false;
+      }
+    }
+  };
+
+  // WebSocket message handlers
+  const handleWebSocketMessage = (event: MessageEvent) => {
+    const message = JSON.parse(event.data);
+    
+    switch (message.type) {
+      case 'beacon_created':
+        activeBeacons.set(message.data.id, message.data);
+        activeBeacons = activeBeacons;
+        logDebug('beacon', `Beacon created by ${users.get(message.data.creatorId)?.username}`, message.data);
+        break;
+
+      case 'beacon_joined':
+        const beacon = activeBeacons.get(message.data.beaconId);
+        if (beacon) {
+          beacon.participants.push(message.data.userId);
+          activeBeacons.set(beacon.id, beacon);
+          activeBeacons = activeBeacons;
+          logDebug('beacon', `${users.get(message.data.userId)?.username} joined beacon`, message.data);
+        }
+        break;
+
+      case 'trade_initiated':
+        activeTrades.set(message.data.id, message.data);
+        activeTrades = activeTrades;
+        logDebug('trade', `Trade initiated between ${users.get(message.data.initiatorId)?.username} and ${users.get(message.data.acceptorId)?.username}`, message.data);
+        if (message.data.acceptorId === user?.id) {
+          logDebug('system', `Received trade request from ${users.get(message.data.initiatorId)?.username}`);
+        }
+        break;
+
+      // ... existing message handlers ...
+    }
+  };
+
+  // Join beacon function
+  const joinBeacon = (beaconId: string) => {
+    const beacon = activeBeacons.get(beaconId);
+    if (beacon && !beacon.participants.includes(user?.id)) {
+      ws.send(JSON.stringify({
+        type: 'beacon_joined',
+        data: { beaconId, userId: user?.id }
+      }));
+    }
+  };
+
+  // Cancel trade function
+  const cancelTrade = (tradeId: string) => {
+    ws.send(JSON.stringify({
+      type: 'trade_cancelled',
+      data: { tradeId }
     }));
+    activeTrades.delete(tradeId);
+    activeTrades = activeTrades;
+  };
+
+  // Debug logging system
+  interface DebugEvent {
+    id: string;
+    type: 'beacon' | 'trade' | 'system' | 'error';
+    message: string;
+    timestamp: string;
+    details?: any;
   }
 
-  $: if (user && $spatialStore[user.id]) {
-    const spatial = $spatialStore[user.id];
-    hudStore.update(state => ({
-      ...state,
-      userState: {
-        cohered: spatial.cohered,
-        lastActive: spatial.lastActive,
-        lastMessage: messages.length > 0 
-          ? messages[messages.length - 1].createdAt 
-          : Date.now()
-      }
-    }));
-  }
->>>>>>> Stashed changes
+  const debugTimeline = writable<DebugEvent[]>([]);
+  let showDebugPanel = true;
+
+  const logDebug = (type: DebugEvent['type'], message: string, details?: any) => {
+    debugTimeline.update(events => {
+      const newEvent = {
+        id: crypto.randomUUID(),
+        type,
+        message,
+        timestamp: new Date().toISOString(),
+        details
+      };
+      // Keep last 100 events
+      return [...events.slice(-99), newEvent];
+    });
+  };
+
+  const toggleDebugPanel = () => {
+    showDebugPanel = !showDebugPanel;
+  };
 </script>
 
 <style>
-  :global(body) {
-    margin: 0;
-    overflow: hidden;
-  }
-
-  main {
-    width: 100vw;
-    height: 100vh;
-  }
-
   .game-container {
     position: fixed;
     top: 0;
@@ -1326,11 +995,12 @@
   .chat-panel {
     position: fixed;
     top: 0;
-    right: 0;
-    bottom: 0;
+    left: 0;
     width: 400px;
-    background: rgba(0, 0, 0, 0.8);
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    height: 100vh;
+    background: white;
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+    z-index: 10;
     display: flex;
     flex-direction: column;
   }
@@ -1362,6 +1032,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 1rem;
+    scroll-behavior: smooth;
   }
 
   .user-avatar {
@@ -1421,36 +1092,33 @@
 
   .radial-grid {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 200vmax;
-    height: 200vmax;
-    transform: translate(-50%, -50%);
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
     pointer-events: none;
   }
 
   .radial-grid::before {
     content: '';
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: 
-      repeating-conic-gradient(
-        from 0deg,
-        transparent 0deg,
-        transparent 14.5deg,
-        rgba(0,0,0,0.05) 15deg,
-        transparent 15.5deg
-      ),
-      repeating-radial-gradient(
-        circle at center,
-        transparent 0,
-        transparent 49px,
-        rgba(0,0,0,0.05) 50px,
-        transparent 51px
-      );
+    top: 50%;
+    left: 50%;
+    width: 1px;
+    height: 1px;
+    background: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 0 100vmax 100vmax rgba(0, 0, 0, 0.05);
+    border-radius: 50%;
+  }
+
+  .radial-line {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100vmax;
+    height: 1px;
+    background: rgba(0, 0, 0, 0.1);
+    transform-origin: 0 0;
   }
 
   .click-ring {
@@ -1469,27 +1137,102 @@
       opacity: 1;
     }
     100% {
-      width: 100px;
-      height: 100px;
+      width: 50px;
+      height: 50px;
       border: 2px solid rgba(76, 175, 80, 0);
       transform: translate(-50%, -50%) scale(2);
       opacity: 0;
     }
   }
 
-  .hud-display {
+  .user-list-panel {
     position: fixed;
-    top: 20px;
-    left: 20px;
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
+    top: 0;
+    right: 0;
+    width: 250px;
+    height: 100vh;
+    background: white;
+    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+    z-index: 10;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+  }
+
+  .user-list-panel.visible {
+    transform: translateX(0);
+  }
+
+  .user-list-header {
     padding: 1rem;
+    font-weight: bold;
+    border-bottom: 1px solid #eee;
+  }
+
+  .user-list {
+    padding: 1rem;
+  }
+
+  .user-item {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+    gap: 0.5rem;
+    border-radius: 0.5rem;
+    transition: all 0.3s ease;
+    position: relative;
+  }
+
+  .user-item.cohered {
+    background: rgba(76, 175, 80, 0.1);
+  }
+
+  .user-item.decohered {
+    opacity: 0.5;
+    background: rgba(255, 0, 0, 0.1);
+  }
+
+  .coherence-indicator {
+    position: absolute;
+    right: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+  }
+
+  .coherence-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+  }
+
+  .coherence-dot.cohered {
+    background: #4CAF50;
+    box-shadow: 0 0 5px #4CAF50;
+  }
+
+  .coherence-dot.decohered {
+    background: #FF5252;
+    box-shadow: 0 0 5px #FF5252;
+  }
+
+  .hud-display {
+    position: sticky;
+    top: 0;
+    background: rgba(0, 0, 0, 0.8);
+    color: #4CAF50;
+    padding: 15px;
     border-radius: 8px;
-    z-index: 100;
+    font-family: monospace;
+    font-size: 12px;
+    pointer-events: none;
+    text-shadow: 0 0 2px rgba(76, 175, 80, 0.5);
+    margin-bottom: 10px;
   }
 
   .hud-section {
-    margin-bottom: 1rem;
+    margin-bottom: 8px;
   }
 
   .hud-section:last-child {
@@ -1497,25 +1240,124 @@
   }
 
   .hud-section h3 {
-    margin: 0 0 0.5rem;
-    font-size: 12px;
+    color: #fff;
+    margin: 0 0 4px 0;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 1px;
   }
 
   .hud-section div {
-    line-height: 1.4;
+    line-height: 1.3;
+    font-size: 11px;
   }
 
-  .debug-log {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
+  .messages-container {
+    overflow-y: auto;
+    max-height: calc(100vh - 200px);
     padding: 1rem;
+    scroll-behavior: smooth;
+  }
+
+  .chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden; /* Prevent container from scrolling */
+  }
+
+  .game-container {
+    position: fixed; /* Keep game container fixed */
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+  }
+
+  .connection-status {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-top: 4px;
+  }
+
+  .connection-status.ok {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+  }
+
+  .connection-status.error {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+  }
+
+  .user-list-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem;
+    /* Add subtle scrollbar styling */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+  }
+
+  .user-list-container::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .user-list-container::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .user-list-container::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.5);
+    border-radius: 3px;
+  }
+
+  .messages-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    /* Match scrollbar styling */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+  }
+
+  .messages-container::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .messages-container::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .messages-container::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.5);
+    border-radius: 3px;
+  }
+
+  .user-list-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 300px;
+    background: var(--background-color);
+    border-left: 1px solid var(--border-color);
+    overflow: hidden; /* Prevent panel from scrolling */
+  }
+
+  .panel-header {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: bold;
+  }
+
+  .schema-window {
+    position: fixed;
+    background: white;
+    border: 1px solid #e5e7eb;
     border-radius: 8px;
-<<<<<<< Updated upstream
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     width: 300px;
     z-index: 1000;
@@ -1783,52 +1625,50 @@
 
   .debug-panel {
     position: fixed;
+    left: 0;
     top: 0;
-    right: 400px; /* Chat panel width */
     bottom: 0;
     width: 300px;
-    background: rgba(0, 0, 0, 0.8);
-    color: #4CAF50;
-    padding: 1rem;
-    overflow-y: auto;
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    background: #1a1a1a;
+    color: #e5e7eb;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.3s ease;
     z-index: 100;
   }
 
+  .debug-panel.hidden {
+    transform: translateX(-100%);
+  }
+
   .debug-header {
+    padding: 0.75rem;
+    background: #2d2d2d;
+    border-bottom: 1px solid #404040;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
 
   .debug-title {
-    font-weight: 500;
-    color: #4CAF50;
-  }
-
-  .debug-toggle {
-    background: none;
-    border: none;
-    color: #4CAF50;
-    cursor: pointer;
-    font-size: 1.5rem;
-    padding: 0;
-    line-height: 1;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #10b981;
   }
 
   .debug-timeline {
     flex: 1;
     overflow-y: auto;
+    padding: 0.5rem;
   }
 
   .debug-event {
     margin-bottom: 0.5rem;
     padding: 0.5rem;
-    background: rgba(76, 175, 80, 0.1);
+    background: #2d2d2d;
     border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.75rem;
   }
 
   .debug-event-header {
@@ -1840,7 +1680,7 @@
   .debug-event-type {
     padding: 0.125rem 0.375rem;
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: 0.625rem;
     text-transform: uppercase;
   }
 
@@ -1850,185 +1690,110 @@
   .debug-event-type.error { background: #ef4444; color: white; }
 
   .debug-event-time {
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 0.75rem;
+    color: #6b7280;
+    font-size: 0.625rem;
   }
 
   .debug-event-message {
-    color: white;
-    margin-bottom: 0.25rem;
+    color: #e5e7eb;
   }
 
   .debug-event-details {
     margin-top: 0.25rem;
     padding: 0.25rem;
-    background: rgba(0, 0, 0, 0.2);
+    background: #404040;
     border-radius: 2px;
-    font-size: 0.75rem;
-    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.625rem;
+    color: #d1d5db;
     white-space: pre-wrap;
     overflow-x: auto;
   }
 
-  /* Chat message styles */
-  .chat {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    padding: 0.5rem 1rem;
-  }
-
-  .chat-image {
-    width: 40px;
-    height: 40px;
-    flex-shrink: 0;
-  }
-
-  .chat-image img {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    object-fit: cover;
-  }
-
-  .chat-bubble {
-    background: rgba(33, 150, 243, 0.1);
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    color: white;
-  }
-
-  /* User list styles */
-  .user-list {
-    position: absolute;
-    right: 0;
-    top: 0;
-    width: 200px;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-    padding: 1rem;
-    overflow-y: auto;
-  }
-
-  .user-list-header {
-    font-size: 1.2rem;
-    font-weight: bold;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  }
-
-  .user-item {
-    display: flex;
-    align-items: center;
+  .debug-toggle {
+    position: fixed;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    background: #2d2d2d;
+    color: #10b981;
+    border: none;
+    border-radius: 0 4px 4px 0;
     padding: 0.5rem;
-    margin-bottom: 0.5rem;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.1);
-    transition: all 0.2s ease;
+    cursor: pointer;
+    z-index: 101;
   }
 
-  .user-item:hover {
-    background: rgba(255, 255, 255, 0.2);
+  /* Adjust main layout for debug panel */
+  main {
+    padding-left: var(--debug-panel-width, 0px);
   }
 
-  .user-item.cohered {
-    border-left: 3px solid #4CAF50;
-  }
-
-  .user-item.decohered {
-    border-left: 3px solid #f44336;
-    opacity: 0.7;
-=======
-    z-index: 100;
-    max-width: 400px;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-
-  .debug-log pre {
-    margin: 0;
-    white-space: pre-wrap;
-    font-size: 12px;
->>>>>>> Stashed changes
+  :global(body) {
+    --debug-panel-width: 300px;
   }
 </style>
 
 <main>
-  <!-- HUD Display -->
-  <div class="hud-display">
-    <div class="hud-section">
-      <h3>Mouse Position</h3>
-      <div>X: {Math.round($hudStore.mouseCartesian.x)}px</div>
-      <div>Y: {Math.round($hudStore.mouseCartesian.y)}px</div>
-      <div>R: {Math.round($hudStore.mousePolar.r)}px</div>
-      <div>θ: {formatDegrees($hudStore.mousePolar.theta)}</div>
-    </div>
-    <div class="hud-section">
-      <h3>User State</h3>
-      <div>Cohered: {$hudStore.userState.cohered ? 'Yes' : 'No'}</div>
-      <div>Last Active: {getTimeSince($hudStore.userState.lastActive)} ago</div>
-      <div>Last Message: {getTimeSince($hudStore.userState.lastMessage)} ago</div>
-    </div>
-  </div>
-
-  <!-- Debug Log -->
-  <div class="debug-log">
-    <pre>{JSON.stringify($debugStore, null, 2)}</pre>
-  </div>
-
   {#if ready}
     {#if user === null}
-      <div class="login flex min-h-screen bg-neutral justify-center items-center">
-        <div class="card w-full max-w-sm bg-base-100 px-4 py-8 shadow-xl">
-          <div class="px-4">
-            <h1 class="text-3xl font-bold text-center my-5 bg-clip-text bg-gradient-to-br">
-              Sign in with email
-            </h1>
+      <div class="hero min-h-screen bg-base-200">
+        <div class="hero-content flex-col lg:flex-row-reverse">
+          <div class="text-center lg:text-left">
+            <h1 class="text-5xl font-bold">Join Now!</h1>
+            <p class="py-6">Enter a username to start chatting.</p>
           </div>
-          <form class="card-body pt-2" on:submit|preventDefault={async (e) => {
-            try {
-              const loginUrl = await auth.getLoginUrl();
-              window.location.href = loginUrl;
-            } catch (error) {
-              console.error('Failed to get login URL:', error);
-              alert('Failed to start login process. Please try again.');
-            }
-          }}>
-            <div class="form-control mt-6">
-              <button id="login" type="submit" class="btn">
-                Sign in
-              </button>
-            </div>
-          </form>
+          <div class="card flex-shrink-0 w-full max-w-sm shadow-2xl bg-base-100">
+            <form class="card-body" on:submit={createUser}>
+              <div class="form-control">
+                <label class="label" for="username">
+                  <span class="label-text">Username</span>
+                </label>
+                <input
+                  type="text"
+                  id="username"
+                  bind:value={username}
+                  placeholder="Enter username"
+                  class="input input-bordered"
+                  required
+                />
+              </div>
+              <div class="form-control mt-6">
+                <button type="submit" class="btn btn-primary">Start Chatting</button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
-    {/if}
-
-    {#if user !== null}
-      <!-- Game container -->
+    {:else}
       <div 
         class="game-container" 
         tabindex="0"
         on:focus={handleGameFocus}
         on:blur={handleGameBlur}
-        on:click={handleGameClick}
+        on:click={handleClick}
+        on:contextmenu={handleContextMenu}
         on:mousemove={handleMouseMove}
         class:has-focus={gameHasFocus}
       >
-        <div class="radial-grid"></div>
-        <div class="center-anchor" style="left: {centerX}px; top: {centerY}px;"></div>
+        <div class="radial-grid">
+          {#each generateRadialGrid() as angle}
+            <div
+              class="radial-line"
+              style="transform: rotate({(angle * 180) / Math.PI}deg)"
+            />
+          {/each}
+        </div>
+        <div class="center-anchor" style="left: {centerX}px; top: {centerY}px;" />
         
-        {#each $clickRingsStore as ring (ring.id)}
+        {#each $clickRingsStore as ring (ring.timestamp)}
           <div 
             class="click-ring" 
             style="left: {ring.x}px; top: {ring.y}px;"
-          ></div>
+          />
         {/each}
 
         <div class="user-space">
-          {#each $connectedUsers as otherUser (otherUser.id)}
+          {#each users as otherUser (otherUser.id)}
             {@const position = getUserPosition(otherUser)}
             <div 
               class="user-avatar {otherUser.id === user?.id ? 'self' : ''} {userDisplayClass(otherUser.id)}"
@@ -2046,14 +1811,13 @@
             </div>
           {/each}
         </div>
-<<<<<<< Updated upstream
 
         {#each Array.from(activeBeacons.values()) as beacon}
           {#if beacon.active}
             <div 
               class="beacon" 
               style="left: {beacon.position.x}px; top: {beacon.position.y}px"
-              title={$connectedUsers.find(u => u.id === beacon.creatorId)?.username + "'s beacon"}
+              title="{users.get(beacon.creatorId)?.username}'s beacon"
             />
           {/if}
         {/each}
@@ -2062,11 +1826,7 @@
           {#if trade.initiatorId === user?.id || trade.acceptorId === user?.id}
             <div class="trade-window" style="left: {trade.position.x}px; top: {trade.position.y}px">
               <div class="trade-header">
-                <div>
-                  Trade with {$connectedUsers.find(u => 
-                    u.id === (trade.initiatorId === user?.id ? trade.acceptorId : trade.initiatorId)
-                  )?.username}
-                </div>
+                <div>Trade with {users.get(trade.initiatorId === user?.id ? trade.acceptorId : trade.initiatorId)?.username}</div>
                 <div>Status: {trade.state}</div>
               </div>
               <div class="trade-content">
@@ -2127,7 +1887,7 @@
               }}
             >
               <span class="context-menu-icon">🤝</span>
-              Trade with {$connectedUsers.find(u => u.id === contextMenu.targetUserId)?.username}
+              Trade with {users.get(contextMenu.targetUserId)?.username}
             </div>
           {/if}
 
@@ -2142,7 +1902,7 @@
                 }}
               >
                 <span class="context-menu-icon">➡️</span>
-                Join {$connectedUsers.find(u => u.id === beacon.creatorId)?.username}'s Beacon
+                Join {users.get(beacon.creatorId)?.username}'s Beacon
               </div>
             {/if}
           {/each}
@@ -2178,69 +1938,31 @@
           </div>
         </div>
 
-        <div class="user-list-header">Users ({$connectedUsers.length})</div>
+        <div class="user-list-header">Users</div>
         <div class="user-list-container">
-          {#each $connectedUsers as user (user.id)}
-            <div class="user-item {user.cohered ? 'cohered' : 'decohered'}">
-              <div class="user-avatar">
-                {#if user.avatar}
-                  <img src={user.avatar} alt={user.username} />
-                {:else}
-                  <div class="default-avatar">{user.username[0]}</div>
-                {/if}
-              </div>
-              <div class="user-info">
-                <div class="username">{user.username}</div>
-                <div class="status">
-                  {#if user.connected}
-                    {#if user.cohered}
-                      Active
-                    {:else}
-                      Idle
-                    {/if}
-                  {:else}
-                    Offline
-                  {/if}
-                </div>
-              </div>
+          {#each sortedUsers as otherUser (otherUser.id)}
+            <div class="user-item {isUserCohered(otherUser) ? 'cohered' : 'decohered'}">
+              <img
+                src={otherUser.avatar}
+                alt={otherUser.username}
+                class="w-8 h-8 rounded-full"
+              />
+              <span class="username">{otherUser.username}</span>
               <div class="coherence-indicator">
-                <div class="coherence-dot {user.cohered ? 'cohered' : 'decohered'}"></div>
-=======
-      </div>
-
-      <!-- Chat Panel -->
-      <div class="chat-panel" class:closed={!chatOpen} transition:slide>
-        <div class="chat-container">
-          {#each messages as message}
-            {@const sender = getUserById(message.userId)}
-            <div class="chat-message">
-              <img src={sender?.avatar} alt={sender?.username} class="w-8 h-8 rounded-full" />
-              <div class="message-content">
-                <div class="sender">{sender?.username}</div>
-                <div class="text">{message.text}</div>
-                <div class="timestamp">{formatDate(message.createdAt)}</div>
->>>>>>> Stashed changes
+                <div class="coherence-dot {isUserCohered(otherUser) ? 'cohered' : 'decohered'}"></div>
+                <span>{isUserCohered(otherUser) ? 'Active' : 'Inactive'}</span>
               </div>
             </div>
           {/each}
         </div>
-        <form class="message-form" on:submit={createMessage}>
-          <input
-            bind:value={text}
-            placeholder="Type a message..."
-            class="message-input"
-          />
-          <button type="submit" class="send-button">Send</button>
-        </form>
       </div>
-      <button
-        class="chat-toggle"
-        class:closed={!chatOpen}
-        on:click={() => (chatOpen = !chatOpen)}
+
+      <button 
+        class="chat-toggle {$chatVisible ? '' : 'closed'}" 
+        on:click={() => chatVisible.update(v => !v)}
       >
-        {chatOpen ? '←' : '→'}
+        {$chatVisible ? '←' : '→'}
       </button>
-<<<<<<< Updated upstream
 
       {#if $chatVisible}
         <div class="chat-panel" transition:slide={{duration: 300, axis: 'x'}}>
@@ -2267,9 +1989,9 @@
                   </div>
                   <div class="chat-header pb-1">
                     {getUserById(message.userId)?.username}
-                    <time class="text-xs opacity-50">
-                      {formatDate(message.createdAt)}
-                    </time>
+                    <time class="text-xs opacity-50"
+                      >{formatDate(message.createdAt)}</time
+                    >
                   </div>
                   <div class="chat-bubble">{message.text}</div>
                 </div>
@@ -2278,36 +2000,114 @@
             </div>
           </div>
 
-          <div class="form-control w-full py-2 px-3">
-            <form
-              class="input-group overflow-hidden"
-              id="send-message"
-              on:submit={createMessage}
-            >
+          <div class="form-control w-full p-4 bg-base-200">
+            <form class="input-group" on:submit={createMessage}>
               <input
-                name="text"
                 type="text"
-                placeholder="Compose message"
-                class="input input-bordered w-full"
                 bind:value={text}
+                placeholder="Type a message..."
+                class="input input-bordered flex-1"
               />
               <button type="submit" class="btn">Send</button>
             </form>
           </div>
         </div>
       {/if}
-
-      <div class="chat-input">
-        <input
-          type="text"
-          bind:value={text}
-          placeholder="Type a message..."
-          class="input"
-          on:keydown={handleChatKeyDown}
-        />
-      </div>
-=======
->>>>>>> Stashed changes
     {/if}
   {/if}
+
+  <div
+    class="schema-window"
+    style="
+      left: {schemaWindowPos.x}px;
+      top: {schemaWindowPos.y}px;
+      height: {isSchemaWindowOpen ? 'auto' : '40px'};
+    "
+    on:mouseup={handleDragEnd}
+  >
+    <div
+      class="schema-header"
+      on:mousedown={handleDragStart}
+      on:mousemove={handleDrag}
+    >
+      <div class="schema-toggle" on:click={() => isSchemaWindowOpen = !isSchemaWindowOpen}>
+        <span style="transform: rotate({isSchemaWindowOpen ? '90deg' : '0deg'}); display: inline-block; transition: transform 0.2s">▶</span>
+        Schemas
+      </div>
+      {#if isSchemaWindowOpen}
+        <div 
+          class="schema-toggle" 
+          on:click={() => isSchemaWindowOpen = false}
+          style="font-size: 1.2rem; line-height: 1;"
+        >×</div>
+      {/if}
+    </div>
+
+    {#if isSchemaWindowOpen}
+      <div class="schema-content">
+        <div class="schema-description">
+          Data structures synchronized between users via WebSocket connections
+          <div class="schema-actions">
+            <button class="schema-action-btn" on:click={expandAllSchemas}>Expand All</button>
+            <button class="schema-action-btn" on:click={collapseAllSchemas}>Collapse All</button>
+          </div>
+        </div>
+        {#each Object.entries(schemas) as [name, schema]}
+          <div class="schema-section">
+            <div class="schema-section-header" on:click={() => toggleSchema(name)}>
+              <div class="schema-section-title">
+                <span class="schema-toggle-arrow {collapsedSchemas.has(name) ? 'collapsed' : ''}">
+                  ▼
+                </span>
+                {name}
+              </div>
+            </div>
+            {#if !collapsedSchemas.has(name)}
+              <div class="schema-section-content">
+                <div class="schema-description">{schema.description}</div>
+                {#each Object.entries(schema.fields) as [field, description]}
+                  <div class="schema-field">
+                    <span class="schema-field-name">{field}:</span> {description}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <div class="debug-panel" class:hidden={!showDebugPanel}>
+    <div class="debug-header">
+      <div class="debug-title">Debug Timeline</div>
+      <button on:click={toggleDebugPanel}>×</button>
+    </div>
+    <div class="debug-timeline">
+      {#each $debugTimeline as event (event.id)}
+        <div class="debug-event">
+          <div class="debug-event-header">
+            <span class="debug-event-type {event.type}">{event.type}</span>
+            <span class="debug-event-time">
+              {new Date(event.timestamp).toLocaleTimeString()}
+            </span>
+          </div>
+          <div class="debug-event-message">{event.message}</div>
+          {#if event.details}
+            <div class="debug-event-details">
+              {JSON.stringify(event.details, null, 2)}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  </div>
+
+  <button 
+    class="debug-toggle" 
+    on:click={toggleDebugPanel}
+    style="left: {showDebugPanel ? '300px' : '0'}"
+  >
+    {showDebugPanel ? '◀' : '▶'}
+  </button>
 </main>
