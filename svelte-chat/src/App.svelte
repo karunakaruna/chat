@@ -651,6 +651,66 @@
   onMount(() => {
     scrollToBottom();
   });
+
+  // Schema window state
+  let isSchemaWindowOpen = false;
+  let schemaWindowPos = { x: 20, y: 20 };
+  let isDragging = false;
+  let dragOffset = { x: 0, y: 0 };
+
+  const handleDragStart = (e: MouseEvent) => {
+    isDragging = true;
+    const rect = (e.target as HTMLElement).closest('.schema-window')?.getBoundingClientRect();
+    if (rect) {
+      dragOffset = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      };
+    }
+  };
+
+  const handleDrag = (e: MouseEvent) => {
+    if (!isDragging) return;
+    schemaWindowPos = {
+      x: e.clientX - dragOffset.x,
+      y: e.clientY - dragOffset.y
+    };
+  };
+
+  const handleDragEnd = () => {
+    isDragging = false;
+  };
+
+  // Schema documentation
+  const schemas = {
+    User: {
+      description: "Represents a user in the chat system",
+      fields: {
+        id: "string (UUID) - Unique identifier",
+        username: "string - Display name",
+        avatar: "string (URL) - User's avatar image",
+        createdAt: "string (ISO date) - Account creation timestamp"
+      }
+    },
+    Message: {
+      description: "A chat message sent by a user",
+      fields: {
+        id: "string (UUID) - Unique identifier",
+        userId: "string (UUID) - Reference to sender",
+        text: "string - Message content",
+        createdAt: "string (ISO date) - Message timestamp"
+      }
+    },
+    SpatialState: {
+      description: "User's position and activity state",
+      fields: {
+        position: "{ x: number, y: number } - Coordinates",
+        lastActive: "number (timestamp) - Last activity time",
+        connected: "boolean - WebSocket connection status",
+        cohered: "boolean - Active within timeout"
+      }
+    }
+  };
 </script>
 
 <style>
@@ -1053,6 +1113,74 @@
     border-bottom: 1px solid var(--border-color);
     font-weight: bold;
   }
+
+  .schema-window {
+    position: fixed;
+    background: var(--background-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    min-width: 300px;
+    max-width: 500px;
+    z-index: 1000;
+    overflow: hidden;
+    transition: height 0.3s ease;
+  }
+
+  .schema-header {
+    padding: 0.5rem;
+    background: var(--background-color);
+    border-bottom: 1px solid var(--border-color);
+    cursor: move;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .schema-content {
+    padding: 1rem;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .schema-toggle {
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background 0.2s;
+  }
+
+  .schema-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .schema-section {
+    margin-bottom: 1.5rem;
+  }
+
+  .schema-section h3 {
+    margin-bottom: 0.5rem;
+    color: #64B5F6;
+  }
+
+  .schema-field {
+    margin: 0.5rem 0;
+    padding: 0.5rem;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+  }
+
+  .schema-field-name {
+    color: #81C784;
+    font-family: monospace;
+  }
+
+  .schema-description {
+    font-style: italic;
+    opacity: 0.8;
+    margin-bottom: 1rem;
+  }
 </style>
 
 <main>
@@ -1240,4 +1368,46 @@
       {/if}
     {/if}
   {/if}
+
+  <div
+    class="schema-window"
+    style="
+      left: {schemaWindowPos.x}px;
+      top: {schemaWindowPos.y}px;
+      height: {isSchemaWindowOpen ? 'auto' : '40px'};
+    "
+    on:mouseup={handleDragEnd}
+  >
+    <div
+      class="schema-header"
+      on:mousedown={handleDragStart}
+      on:mousemove={handleDrag}
+    >
+      <div class="schema-toggle" on:click={() => isSchemaWindowOpen = !isSchemaWindowOpen}>
+        {isSchemaWindowOpen ? '▼' : '▶'} Schemas
+      </div>
+      {#if isSchemaWindowOpen}
+        <div class="schema-toggle" on:click={() => isSchemaWindowOpen = false}>✕</div>
+      {/if}
+    </div>
+
+    {#if isSchemaWindowOpen}
+      <div class="schema-content">
+        <div class="schema-description">
+          Data structures synchronized between users via WebSocket connections
+        </div>
+        {#each Object.entries(schemas) as [name, schema]}
+          <div class="schema-section">
+            <h3>{name}</h3>
+            <div class="schema-description">{schema.description}</div>
+            {#each Object.entries(schema.fields) as [field, description]}
+              <div class="schema-field">
+                <span class="schema-field-name">{field}:</span> {description}
+              </div>
+            {/each}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
 </main>
