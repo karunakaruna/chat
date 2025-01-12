@@ -620,7 +620,7 @@
 
   init();
 
-  // Add sorted users derived store
+  // Sort users by coherence status
   $: sortedUsers = users.sort((a, b) => {
     const aActive = isUserCohered(a);
     const bActive = isUserCohered(b);
@@ -632,28 +632,24 @@
     return aActive ? -1 : 1;
   });
 
-  // Auto-scroll chat on new messages
-  $: {
-    if (messages.length) {
-      setTimeout(() => {
-        const chatEnd = document.getElementById('message-end');
-        chatEnd?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+  // Scroll chat to bottom
+  const scrollToBottom = () => {
+    const messagesContainer = document.querySelector('.messages-container');
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
+  };
+
+  // Watch messages for changes and scroll
+  $: {
+    messages; // reactive dependency
+    // Use setTimeout to ensure DOM is updated
+    setTimeout(scrollToBottom, 0);
   }
 
-  // Auto-scroll on mount
+  // Scroll on mount
   onMount(() => {
-    updateCenterPoint();
-    window.addEventListener('resize', updateCenterPoint);
-    
-    // Initial scroll to bottom
-    const chatEnd = document.getElementById('message-end');
-    chatEnd?.scrollIntoView();
-
-    return () => {
-      window.removeEventListener('resize', updateCenterPoint);
-    };
+    scrollToBottom();
   });
 </script>
 
@@ -1001,27 +997,61 @@
   .user-list-container {
     flex: 1;
     overflow-y: auto;
-    max-height: calc(100vh - 300px); /* Adjust based on your layout */
-    padding-right: 8px; /* Space for scrollbar */
+    padding: 0.5rem;
+    /* Add subtle scrollbar styling */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
   }
 
-  /* Style scrollbar */
   .user-list-container::-webkit-scrollbar {
     width: 6px;
   }
 
   .user-list-container::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.1);
-    border-radius: 3px;
+    background: transparent;
   }
 
   .user-list-container::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.2);
+    background-color: rgba(156, 163, 175, 0.5);
     border-radius: 3px;
   }
 
-  .user-list-container::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.3);
+  .messages-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    /* Match scrollbar styling */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+  }
+
+  .messages-container::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .messages-container::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .messages-container::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.5);
+    border-radius: 3px;
+  }
+
+  .user-list-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 300px;
+    background: var(--background-color);
+    border-left: 1px solid var(--border-color);
+    overflow: hidden; /* Prevent panel from scrolling */
+  }
+
+  .panel-header {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: bold;
   }
 </style>
 
