@@ -652,35 +652,6 @@
     scrollToBottom();
   });
 
-  // Schema window state
-  let isSchemaWindowOpen = false;
-  let schemaWindowPos = { x: 20, y: 20 };
-  let isDragging = false;
-  let dragOffset = { x: 0, y: 0 };
-
-  const handleDragStart = (e: MouseEvent) => {
-    isDragging = true;
-    const rect = (e.target as HTMLElement).closest('.schema-window')?.getBoundingClientRect();
-    if (rect) {
-      dragOffset = {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-      };
-    }
-  };
-
-  const handleDrag = (e: MouseEvent) => {
-    if (!isDragging) return;
-    schemaWindowPos = {
-      x: e.clientX - dragOffset.x,
-      y: e.clientY - dragOffset.y
-    };
-  };
-
-  const handleDragEnd = () => {
-    isDragging = false;
-  };
-
   // Schema documentation
   const schemas = {
     User: {
@@ -710,6 +681,64 @@
         cohered: "boolean - Active within timeout"
       }
     }
+  };
+
+  // Initialize all schemas as collapsed
+  let collapsedSchemas = new Set(Object.keys(schemas));
+
+  // Toggle schema section
+  const toggleSchema = (name: string) => {
+    if (collapsedSchemas.has(name)) {
+      collapsedSchemas.delete(name);
+    } else {
+      collapsedSchemas.add(name);
+    }
+    collapsedSchemas = collapsedSchemas; // trigger reactivity
+  };
+
+  // Add expand/collapse all functionality
+  const expandAllSchemas = () => {
+    collapsedSchemas = new Set();
+  };
+
+  const collapseAllSchemas = () => {
+    collapsedSchemas = new Set(Object.keys(schemas));
+  };
+
+  let isSchemaWindowOpen = false;
+  let schemaWindowPos = { x: window.innerWidth - 620, y: 20 };
+  let isDragging = false;
+  let dragOffset = { x: 0, y: 0 };
+
+  onMount(() => {
+    const updatePosition = () => {
+      schemaWindowPos = { x: window.innerWidth - 620, y: 20 };
+    };
+    window.addEventListener('resize', updatePosition);
+    return () => window.removeEventListener('resize', updatePosition);
+  });
+
+  const handleDragStart = (e: MouseEvent) => {
+    isDragging = true;
+    const rect = (e.target as HTMLElement).closest('.schema-window')?.getBoundingClientRect();
+    if (rect) {
+      dragOffset = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      };
+    }
+  };
+
+  const handleDrag = (e: MouseEvent) => {
+    if (!isDragging) return;
+    schemaWindowPos = {
+      x: e.clientX - dragOffset.x,
+      y: e.clientY - dragOffset.y
+    };
+  };
+
+  const handleDragEnd = () => {
+    isDragging = false;
   };
 </script>
 
@@ -1116,70 +1145,139 @@
 
   .schema-window {
     position: fixed;
-    background: var(--background-color);
-    border: 1px solid var(--border-color);
+    background: white;
+    border: 1px solid #e5e7eb;
     border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    min-width: 300px;
-    max-width: 500px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    width: 300px;
     z-index: 1000;
     overflow: hidden;
     transition: height 0.3s ease;
   }
 
   .schema-header {
-    padding: 0.5rem;
-    background: var(--background-color);
-    border-bottom: 1px solid var(--border-color);
+    padding: 0.75rem;
+    background: white;
+    border-bottom: 1px solid #e5e7eb;
     cursor: move;
     user-select: none;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    font-size: 0.875rem;
+    color: #374151;
   }
 
   .schema-content {
     padding: 1rem;
     max-height: 400px;
     overflow-y: auto;
+    background: white;
+    color: #374151;
   }
 
   .schema-toggle {
     cursor: pointer;
-    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 2px;
     border-radius: 4px;
     transition: background 0.2s;
   }
 
   .schema-toggle:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.05);
   }
 
   .schema-section {
     margin-bottom: 1.5rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    overflow: hidden;
   }
 
-  .schema-section h3 {
-    margin-bottom: 0.5rem;
-    color: #64B5F6;
+  .schema-section-header {
+    padding: 0.75rem;
+    background: #f9fafb;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background 0.2s;
+  }
+
+  .schema-section-header:hover {
+    background: #f3f4f6;
+  }
+
+  .schema-section-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #2563eb;
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .schema-section-content {
+    padding: 0.75rem;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .schema-toggle-arrow {
+    display: inline-block;
+    transition: transform 0.2s;
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+
+  .schema-toggle-arrow.collapsed {
+    transform: rotate(-90deg);
   }
 
   .schema-field {
     margin: 0.5rem 0;
     padding: 0.5rem;
-    background: rgba(0, 0, 0, 0.1);
+    background: #f3f4f6;
     border-radius: 4px;
+    font-size: 0.875rem;
   }
 
   .schema-field-name {
-    color: #81C784;
+    color: #059669;
     font-family: monospace;
+    font-weight: 500;
   }
 
   .schema-description {
     font-style: italic;
-    opacity: 0.8;
+    color: #6b7280;
+    font-size: 0.875rem;
     margin-bottom: 1rem;
+  }
+
+  .schema-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .schema-action-btn {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #f3f4f6;
+    color: #4b5563;
+    border: 1px solid #e5e7eb;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .schema-action-btn:hover {
+    background: #e5e7eb;
+    color: #374151;
   }
 </style>
 
@@ -1384,10 +1482,15 @@
       on:mousemove={handleDrag}
     >
       <div class="schema-toggle" on:click={() => isSchemaWindowOpen = !isSchemaWindowOpen}>
-        {isSchemaWindowOpen ? '▼' : '▶'} Schemas
+        <span style="transform: rotate({isSchemaWindowOpen ? '90deg' : '0deg'}); display: inline-block; transition: transform 0.2s">▶</span>
+        Schemas
       </div>
       {#if isSchemaWindowOpen}
-        <div class="schema-toggle" on:click={() => isSchemaWindowOpen = false}>✕</div>
+        <div 
+          class="schema-toggle" 
+          on:click={() => isSchemaWindowOpen = false}
+          style="font-size: 1.2rem; line-height: 1;"
+        >×</div>
       {/if}
     </div>
 
@@ -1395,16 +1498,31 @@
       <div class="schema-content">
         <div class="schema-description">
           Data structures synchronized between users via WebSocket connections
+          <div class="schema-actions">
+            <button class="schema-action-btn" on:click={expandAllSchemas}>Expand All</button>
+            <button class="schema-action-btn" on:click={collapseAllSchemas}>Collapse All</button>
+          </div>
         </div>
         {#each Object.entries(schemas) as [name, schema]}
           <div class="schema-section">
-            <h3>{name}</h3>
-            <div class="schema-description">{schema.description}</div>
-            {#each Object.entries(schema.fields) as [field, description]}
-              <div class="schema-field">
-                <span class="schema-field-name">{field}:</span> {description}
+            <div class="schema-section-header" on:click={() => toggleSchema(name)}>
+              <div class="schema-section-title">
+                <span class="schema-toggle-arrow {collapsedSchemas.has(name) ? 'collapsed' : ''}">
+                  ▼
+                </span>
+                {name}
               </div>
-            {/each}
+            </div>
+            {#if !collapsedSchemas.has(name)}
+              <div class="schema-section-content">
+                <div class="schema-description">{schema.description}</div>
+                {#each Object.entries(schema.fields) as [field, description]}
+                  <div class="schema-field">
+                    <span class="schema-field-name">{field}:</span> {description}
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {/each}
       </div>
