@@ -78,8 +78,25 @@
       cohered: true,
       lastActive: Date.now(),
       lastMessage: Date.now()
+    },
+    performance: {
+      fps: 0
     }
   });
+
+  // Visual state store (for smooth animations)
+  const visualStore = writable<Record<string, {
+    currentR: number;
+    currentTheta: number;
+    targetR: number;
+    targetTheta: number;
+  }>>({});
+
+  // FPS tracking
+  let fps = 0;
+  let lastFrameTime = performance.now();
+  let frameCount = 0;
+  let lastFpsUpdate = performance.now();
 
   // Polar coordinate lerping
   const lerpPolar = (start: PolarPosition, end: PolarPosition, t: number): PolarPosition => {
@@ -98,10 +115,12 @@
     return { r, theta };
   };
 
+  const lerp = (start: number, end: number, t: number): number => {
+    return start * (1 - t) + end * t;
+  };
+
   const handleMouseMove = (event: MouseEvent) => {
-    if (user) {
-      updatePosition(event.clientX, event.clientY);
-    }
+    // Only update HUD, no movement
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left - centerX;
     const y = event.clientY - rect.top - centerY;
@@ -112,6 +131,14 @@
       mouseCartesian: { x, y },
       mousePolar: polar
     }));
+
+    // Debounced activity update
+    let moveTimeout: number | null = null;
+    if (moveTimeout) clearTimeout(moveTimeout);
+    moveTimeout = setTimeout(() => {
+      handleUserInteraction();
+      moveTimeout = null;
+    }, 1000) as unknown as number;
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -145,63 +172,58 @@
   };
 
   const handleGameClick = (event: MouseEvent) => {
-    if (!user) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const clickX = event.clientX - rect.left - centerX;
-    const clickY = event.clientY - rect.top - centerY;
+    const clickX = event.clientX - rect.left;
+    const clickY = event.clientY - rect.top;
     
-    // Convert click position to polar coordinates
-    const polarPos = cartesianToPolar(clickX, clickY);
-    
-    targetR = polarPos.r;
-    targetTheta = polarPos.theta;
+    addClickRing(clickX, clickY);
+    handleUserInteraction();
+  };
 
-    // Initialize spatial state if needed
-    if (!$spatialStore[user.id]) {
-      initUserSpatial(user.id);
-    }
-
-    // If this is our first movement, set current position
-    if (currentR === 0) {
-      currentR = targetR;
-      currentTheta = targetTheta;
-    }
-    
-    // Update spatial store
-    spatialStore.update(state => ({
+  // Initialize visual state for a user
+  const initVisualState = (userId: string, r: number = 0, theta: number = 0) => {
+    visualStore.update(state => ({
       ...state,
-      [user.id]: {
-        position: { r: currentR, theta: currentTheta },
-        lastActive: Date.now(),
-        cohered: true
+      [userId]: {
+        currentR: r,
+        currentTheta: theta,
+        targetR: r,
+        targetTheta: theta
       }
     }));
-    
-    addClickRing(event.clientX, event.clientY);
+  };
+
+  // Update target position (called on click)
+  const updateTargetPosition = (userId: string, r: number, theta: number) => {
+    visualStore.update(state => {
+      const visual = state[userId] || { currentR: 0, currentTheta: 0, targetR: 0, targetTheta: 0 };
+      return {
+        ...state,
+        [userId]: {
+          ...visual,
+          targetR: r,
+          targetTheta: theta
+        }
+      };
+    });
   };
 
   // Game loop for smooth movement in polar coordinates
   const gameLoop = () => {
-    if (user) {
-      // Get current position in polar coordinates
-      const currentPolar = { r: currentR, theta: currentTheta };
-      const targetPolar = { r: targetR, theta: targetTheta };
-      
-      // Lerp in polar space
-      const newPolar = lerpPolar(currentPolar, targetPolar, lerpSpeed);
-      currentR = newPolar.r;
-      currentTheta = newPolar.theta;
-      
-      // Update spatial store with new position
-      spatialStore.update(state => ({
+    const currentTime = performance.now();
+    
+    // Only update FPS
+    frameCount++;
+    if (currentTime - lastFpsUpdate > 1000) {
+      fps = Math.round((frameCount * 1000) / (currentTime - lastFpsUpdate));
+      hudStore.update(state => ({
         ...state,
-        [user.id]: {
-          position: { r: currentR, theta: currentTheta },
-          lastActive: Date.now(),
-          cohered: true
-        }
+        performance: { fps }
       }));
+      frameCount = 0;
+      lastFpsUpdate = currentTime;
     }
+    
     animationFrame = window.requestAnimationFrame(gameLoop);
   };
 
@@ -214,6 +236,8 @@
     centerX = window.innerWidth / 2;
     centerY = window.innerHeight / 2;
   };
+
+  let connectionError = false;
 
   const init = async () => {
     try {
@@ -259,9 +283,10 @@
     spatialStore.update(state => ({
       ...state,
       [userId]: {
-        position: { r: 0, theta: 0 },
+        position: { x: 0, y: 0 },
         lastActive: Date.now(),
-        cohered: true
+        connected: false,
+        cohered: false
       }
     }));
   };
@@ -275,50 +300,73 @@
     });
   }
 
+  let username = '';
+
   // Sets the current user's username and stores it in the document
   const createUser = async (ev: Event) => {
-    const formElement = ev.target as HTMLFormElement;
-    const input: string = formElement.username.value;
-    const username = input.trim().toLowerCase();
-    const existingUser = users.find((user) => user.id === cloudAuthUser?.id);
-
     ev.preventDefault();
+    if (!username.trim()) return;
+    
+    try {
+      const newUser: User = {
+        id: crypto.randomUUID(),
+        username: username.trim(),
+        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${username}`,
+        createdAt: new Date().toISOString(),
+      };
+      
+      user = newUser;
+      users = [...users, newUser];
+      
+      // Initialize spatial state for new user
+      initUserSpatial(newUser.id);
+      initVisualState(newUser.id);
 
-    if (existingUser) {
-      user = existingUser;
-    } else if (users.find((user) => user.username === username)) {
-      alert('Username already taken, please choose another one');
-    } else {
-      const emailHash = await sha256(cloudAuthUser?.email || 'unknown');
-
-      handle.change((doc) => {
-        if (cloudAuthUser !== null) {
-          doc.users.push({
-            id: cloudAuthUser.id,
-            avatar: `https://www.gravatar.com/avatar/${emailHash}?s=40&d=identicon`,
-            username,
-            position: getDefaultPosition(),
-            lastActive: Date.now()
+      // Try to connect to automerge, but don't block on it
+      try {
+        const existingUser = users.find((u) => u.id === cloudAuthUser?.id);
+        if (existingUser) {
+          console.log('Existing user found:', existingUser);
+        } else if (users.find((u) => u.username === username)) {
+          throw new Error('Username already taken');
+        } else {
+          // Attempt automerge connection in background
+          connectToAutomerge().catch(err => {
+            console.warn('Automerge connection failed:', err);
+            connectionError = true;
           });
         }
-      });
+      } catch (err) {
+        console.warn('Automerge setup failed:', err);
+        connectionError = true;
+      }
+    } catch (err) {
+      console.error('User creation failed:', err);
+      alert('Failed to create user. Please try again.');
     }
   };
 
+  $: {
+    if (connectionError) {
+      console.warn('Running in local-only mode due to connection error');
+    }
+  }
+
   const createMessage = (ev: Event) => {
     ev.preventDefault();
+    if (!user || !text.trim()) return;
 
-    handle.change((doc) => {
-      if (user !== null) {
-        doc.messages.push({
-          id: crypto.randomUUID(),
-          text: text,
-          createdAt: Date.now(),
-          userId: user.id
-        });
-        text = '';
-      }
-    });
+    const newMessage = {
+      id: crypto.randomUUID(),
+      userId: user.id,
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
+      timestamp: Date.now()
+    };
+
+    messages = [...messages, newMessage];
+    text = '';
+    updateUserActivity(user.id);
   };
 
   const updatePosition = (x: number, y: number) => {
@@ -364,21 +412,73 @@
 
   // Get user position from spatial store
   const getUserPosition = (user: User): Position => {
-    const spatial = $spatialStore[user.id];
-    if (!spatial || !isUserCohered(user)) {
-      // Return center position for decohered or new users
-      return { x: 0, y: 0 };
-    }
-    return polarToCartesian(spatial.position.r, spatial.position.theta);
+    return { x: 0, y: 0 };
   };
 
   // Coherence check functions
-  const COHERENCE_TIMEOUT = 60000; // 1 minute
+  const COHERENCE_TIMEOUT = 15 * 60 * 1000; // 15 minutes in milliseconds
 
   const isUserCohered = (user: User): boolean => {
     const spatial = $spatialStore[user.id];
     if (!spatial) return false;
-    return Date.now() - spatial.lastActive < COHERENCE_TIMEOUT;
+    
+    const now = Date.now();
+    const timeSinceActive = now - spatial.lastActive;
+    
+    // User must have both:
+    // 1. Active websocket connection
+    // 2. Recent activity within timeout
+    return spatial.connected && timeSinceActive < COHERENCE_TIMEOUT;
+  };
+
+  // Track websocket connections
+  let activeConnections = new Set<string>();
+
+  // Handle websocket connection updates
+  const handleWebSocketConnection = (userId: string, connected: boolean) => {
+    if (connected) {
+      activeConnections.add(userId);
+    } else {
+      activeConnections.delete(userId);
+    }
+    
+    spatialStore.update(state => ({
+      ...state,
+      [userId]: {
+        ...state[userId],
+        connected,
+        cohered: connected && (Date.now() - state[userId].lastActive < COHERENCE_TIMEOUT)
+      }
+    }));
+  };
+
+  // Update user activity
+  const updateUserActivity = (userId: string) => {
+    const now = Date.now();
+    spatialStore.update(state => ({
+      ...state,
+      [userId]: {
+        ...state[userId],
+        lastActive: now,
+        cohered: state[userId].connected && true // If connected, activity makes them cohered
+      }
+    }));
+
+    if (user?.id === userId) {
+      hudStore.update(state => ({
+        ...state,
+        userState: {
+          ...state.userState,
+          lastActive: now
+        }
+      }));
+    }
+  };
+
+  // Handle user interactions that should trigger activity
+  const handleUserInteraction = () => {
+    if (!user) return;
+    updateUserActivity(user.id);
   };
 
   // Check coherence and update positions periodically
@@ -424,10 +524,18 @@
   };
 
   const addClickRing = (x: number, y: number) => {
-    const timestamp = Date.now();
-    clickRingsStore.update(rings => [...rings, { x, y, timestamp }]);
+    clickRingsStore.update(rings => [
+      ...rings,
+      {
+        x,
+        y,
+        timestamp: Date.now()
+      }
+    ]);
+
+    // Remove ring after animation
     setTimeout(() => {
-      clickRingsStore.update(rings => rings.filter(ring => ring.timestamp !== timestamp));
+      clickRingsStore.update(rings => rings.slice(1));
     }, 500);
   };
 
@@ -441,6 +549,17 @@
 
   const formatDegrees = (radians: number) => {
     return `${Math.round(radians * (180 / Math.PI))}°`;
+  };
+
+  const RADIAL_DIVISIONS = 23;
+
+  const generateRadialGrid = () => {
+    const lines = [];
+    for (let i = 0; i < RADIAL_DIVISIONS; i++) {
+      const angle = (i * 2 * Math.PI) / RADIAL_DIVISIONS;
+      lines.push(angle);
+    }
+    return lines;
   };
 
   onMount(() => {
@@ -494,24 +613,48 @@
   });
 
   afterUpdate(() => {
-    document
-      .getElementById('message-end')
-      ?.scrollIntoView({ behavior: 'smooth' });
+    // Don't auto-scroll
   });
-
-  const updateUserActivity = () => {
-    if (!user) return;
-    handle.change((doc) => {
-      const userToUpdate = doc.users.find((u) => u.id === user.id);
-      if (userToUpdate) {
-        userToUpdate.lastActive = Date.now();
-      }
-    });
-  };
 
   const getUserById = (id: string) => users.find((user) => user.id === id);
 
   init();
+
+  // Add sorted users derived store
+  $: sortedUsers = users.sort((a, b) => {
+    const aActive = isUserCohered(a);
+    const bActive = isUserCohered(b);
+    if (aActive === bActive) {
+      // If same coherence status, sort by username
+      return a.username.localeCompare(b.username);
+    }
+    // Active users first
+    return aActive ? -1 : 1;
+  });
+
+  // Auto-scroll chat on new messages
+  $: {
+    if (messages.length) {
+      setTimeout(() => {
+        const chatEnd = document.getElementById('message-end');
+        chatEnd?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }
+  }
+
+  // Auto-scroll on mount
+  onMount(() => {
+    updateCenterPoint();
+    window.addEventListener('resize', updateCenterPoint);
+    
+    // Initial scroll to bottom
+    const chatEnd = document.getElementById('message-end');
+    chatEnd?.scrollIntoView();
+
+    return () => {
+      window.removeEventListener('resize', updateCenterPoint);
+    };
+  });
 </script>
 
 <style>
@@ -594,6 +737,7 @@
     flex: 1;
     overflow-y: auto;
     padding: 1rem;
+    scroll-behavior: smooth;
   }
 
   .user-avatar {
@@ -653,36 +797,33 @@
 
   .radial-grid {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 200vmax;
-    height: 200vmax;
-    transform: translate(-50%, -50%);
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
     pointer-events: none;
   }
 
   .radial-grid::before {
     content: '';
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: 
-      repeating-conic-gradient(
-        from 0deg,
-        transparent 0deg,
-        transparent 14.5deg,
-        rgba(0,0,0,0.05) 15deg,
-        transparent 15.5deg
-      ),
-      repeating-radial-gradient(
-        circle at center,
-        transparent 0,
-        transparent 49px,
-        rgba(0,0,0,0.05) 50px,
-        transparent 51px
-      );
+    top: 50%;
+    left: 50%;
+    width: 1px;
+    height: 1px;
+    background: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 0 100vmax 100vmax rgba(0, 0, 0, 0.05);
+    border-radius: 50%;
+  }
+
+  .radial-line {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100vmax;
+    height: 1px;
+    background: rgba(0, 0, 0, 0.1);
+    transform-origin: 0 0;
   }
 
   .click-ring {
@@ -707,20 +848,6 @@
       transform: translate(-50%, -50%) scale(2);
       opacity: 0;
     }
-  }
-
-  .coordinate-grid {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 100%;
-    height: 100%;
-    transform: translate(-50%, -50%);
-    background-image: 
-      linear-gradient(to right, rgba(0,0,0,0.1) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(0,0,0,0.1) 1px, transparent 1px);
-    background-size: 50px 50px;
-    pointer-events: none;
   }
 
   .user-list-panel {
@@ -753,42 +880,64 @@
   .user-item {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
     padding: 0.5rem;
-    border-radius: 4px;
-    transition: background-color 0.2s;
+    gap: 0.5rem;
+    border-radius: 0.5rem;
+    transition: all 0.3s ease;
+    position: relative;
   }
 
-  .user-item:hover {
-    background: #f5f5f5;
+  .user-item.cohered {
+    background: rgba(76, 175, 80, 0.1);
   }
 
-  .coherence-status {
-    margin-left: auto;
-    font-size: 1.2rem;
+  .user-item.decohered {
+    opacity: 0.5;
+    background: rgba(255, 0, 0, 0.1);
   }
 
-  .coherence-status:not(.cohered) {
-    opacity: 0.3;
+  .coherence-indicator {
+    position: absolute;
+    right: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+  }
+
+  .coherence-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+  }
+
+  .coherence-dot.cohered {
+    background: #4CAF50;
+    box-shadow: 0 0 5px #4CAF50;
+  }
+
+  .coherence-dot.decohered {
+    background: #FF5252;
+    box-shadow: 0 0 5px #FF5252;
   }
 
   .hud-display {
-    position: fixed;
-    top: 20px;
-    left: 20px;
+    position: sticky;
+    top: 0;
     background: rgba(0, 0, 0, 0.8);
     color: #4CAF50;
     padding: 15px;
     border-radius: 8px;
     font-family: monospace;
-    font-size: 14px;
-    z-index: 1000;
+    font-size: 12px;
     pointer-events: none;
     text-shadow: 0 0 2px rgba(76, 175, 80, 0.5);
+    margin-bottom: 10px;
   }
 
   .hud-section {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   .hud-section:last-child {
@@ -797,67 +946,117 @@
 
   .hud-section h3 {
     color: #fff;
-    margin: 0 0 5px 0;
-    font-size: 12px;
+    margin: 0 0 4px 0;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 1px;
   }
 
   .hud-section div {
-    line-height: 1.4;
+    line-height: 1.3;
+    font-size: 11px;
+  }
+
+  .messages-container {
+    overflow-y: auto;
+    max-height: calc(100vh - 200px);
+    padding: 1rem;
+    scroll-behavior: smooth;
+  }
+
+  .chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden; /* Prevent container from scrolling */
+  }
+
+  .game-container {
+    position: fixed; /* Keep game container fixed */
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+  }
+
+  .connection-status {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-top: 4px;
+  }
+
+  .connection-status.ok {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4CAF50;
+  }
+
+  .connection-status.error {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+  }
+
+  .user-list-container {
+    flex: 1;
+    overflow-y: auto;
+    max-height: calc(100vh - 300px); /* Adjust based on your layout */
+    padding-right: 8px; /* Space for scrollbar */
+  }
+
+  /* Style scrollbar */
+  .user-list-container::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .user-list-container::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 3px;
+  }
+
+  .user-list-container::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+  }
+
+  .user-list-container::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
   }
 </style>
 
 <main>
-  <!-- HUD Display -->
-  <div class="hud-display">
-    <div class="hud-section">
-      <h3>Mouse Position</h3>
-      <div>X: {Math.round($hudStore.mouseCartesian.x)}px</div>
-      <div>Y: {Math.round($hudStore.mouseCartesian.y)}px</div>
-      <div>R: {Math.round($hudStore.mousePolar.r)}px</div>
-      <div>θ: {formatDegrees($hudStore.mousePolar.theta)}</div>
-    </div>
-    <div class="hud-section">
-      <h3>User State</h3>
-      <div>Cohered: {$hudStore.userState.cohered ? 'Yes' : 'No'}</div>
-      <div>Last Active: {getTimeSince($hudStore.userState.lastActive)} ago</div>
-      <div>Last Message: {getTimeSince($hudStore.userState.lastMessage)} ago</div>
-    </div>
-  </div>
-
   {#if ready}
     {#if user === null}
-      <div
-        class="login flex min-h-screen bg-neutral justify-center items-center"
-      >
-        <div class="card w-full max-w-sm bg-base-100 px-4 py-8 shadow-xl">
-          <div class="px-4">
-            <h1
-              class="text-3xl font-bold text-center my-5 bg-clip-text bg-gradient-to-br"
-            >
-              Pick a username
-            </h1>
+      <div class="hero min-h-screen bg-base-200">
+        <div class="hero-content flex-col lg:flex-row-reverse">
+          <div class="text-center lg:text-left">
+            <h1 class="text-5xl font-bold">Join Now!</h1>
+            <p class="py-6">Enter a username to start chatting.</p>
           </div>
-          <form class="card-body pt-2" on:submit={createUser}>
-            <div class="form-control">
-              <label for="username" class="label"
-                ><span class="label-text">Your username</span></label
-              >
-              <input type="text" name="username" class="input input-bordered" />
-            </div>
-            <div class="form-control mt-6">
-              <button id="login" type="submit" class="btn"
-                >Start chatting</button
-              >
-            </div>
-          </form>
+          <div class="card flex-shrink-0 w-full max-w-sm shadow-2xl bg-base-100">
+            <form class="card-body" on:submit={createUser}>
+              <div class="form-control">
+                <label class="label" for="username">
+                  <span class="label-text">Username</span>
+                </label>
+                <input
+                  type="text"
+                  id="username"
+                  bind:value={username}
+                  placeholder="Enter username"
+                  class="input input-bordered"
+                  required
+                />
+              </div>
+              <div class="form-control mt-6">
+                <button type="submit" class="btn btn-primary">Start Chatting</button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
-    {/if}
-
-    {#if user !== null}
-      <!-- Game container for movement -->
+    {:else}
       <div 
         class="game-container" 
         tabindex="0"
@@ -867,14 +1066,21 @@
         on:mousemove={handleMouseMove}
         class:has-focus={gameHasFocus}
       >
-        <div class="radial-grid"></div>
-        <div class="center-anchor" style="left: {centerX}px; top: {centerY}px;"></div>
+        <div class="radial-grid">
+          {#each generateRadialGrid() as angle}
+            <div
+              class="radial-line"
+              style="transform: rotate({(angle * 180) / Math.PI}deg)"
+            />
+          {/each}
+        </div>
+        <div class="center-anchor" style="left: {centerX}px; top: {centerY}px;" />
         
         {#each $clickRingsStore as ring (ring.timestamp)}
           <div 
             class="click-ring" 
             style="left: {ring.x}px; top: {ring.y}px;"
-          ></div>
+          />
         {/each}
 
         <div class="user-space">
@@ -898,27 +1104,54 @@
         </div>
       </div>
 
-      <!-- User List Panel -->
       <div class="user-list-panel" class:visible={$chatVisible}>
+        <!-- HUD Display -->
+        <div class="hud-display">
+          <div class="hud-section">
+            <h3>System Status</h3>
+            <div>Mode: {connectionError ? 'Local Only' : 'Connected'}</div>
+            <div class="connection-status {connectionError ? 'error' : 'ok'}">
+              {connectionError ? '⚠️ Connection Failed' : '✓ Online'}
+            </div>
+          </div>
+          <div class="hud-section">
+            <h3>Performance</h3>
+            <div>FPS: {$hudStore.performance.fps}</div>
+          </div>
+          <div class="hud-section">
+            <h3>Mouse Position</h3>
+            <div>X: {Math.round($hudStore.mouseCartesian.x)}px</div>
+            <div>Y: {Math.round($hudStore.mouseCartesian.y)}px</div>
+            <div>R: {Math.round($hudStore.mousePolar.r)}px</div>
+            <div>θ: {formatDegrees($hudStore.mousePolar.theta)}</div>
+          </div>
+          <div class="hud-section">
+            <h3>User State</h3>
+            <div>Cohered: {$hudStore.userState.cohered ? 'Yes' : 'No'}</div>
+            <div>Last Active: {getTimeSince($hudStore.userState.lastActive)} ago</div>
+            <div>Last Message: {getTimeSince($hudStore.userState.lastMessage)} ago</div>
+          </div>
+        </div>
+
         <div class="user-list-header">Users</div>
-        <div class="user-list">
-          {#each users as otherUser (otherUser.id)}
+        <div class="user-list-container">
+          {#each sortedUsers as otherUser (otherUser.id)}
             <div class="user-item {isUserCohered(otherUser) ? 'cohered' : 'decohered'}">
               <img
                 src={otherUser.avatar}
                 alt={otherUser.username}
                 class="w-8 h-8 rounded-full"
               />
-              <span>{otherUser.username}</span>
-              <span class="coherence-status">
-                {isUserCohered(otherUser) ? '●' : '○'}
-              </span>
+              <span class="username">{otherUser.username}</span>
+              <div class="coherence-indicator">
+                <div class="coherence-dot {isUserCohered(otherUser) ? 'cohered' : 'decohered'}"></div>
+                <span>{isUserCohered(otherUser) ? 'Active' : 'Inactive'}</span>
+              </div>
             </div>
           {/each}
         </div>
       </div>
 
-      <!-- Chat Toggle Button -->
       <button 
         class="chat-toggle {$chatVisible ? '' : 'closed'}" 
         on:click={() => chatVisible.update(v => !v)}
@@ -926,7 +1159,6 @@
         {$chatVisible ? '←' : '→'}
       </button>
 
-      <!-- Chat Panel -->
       {#if $chatVisible}
         <div class="chat-panel" transition:slide={{duration: 300, axis: 'x'}}>
           <div class="navbar w-full">
@@ -939,26 +1171,28 @@
           </div>
 
           <div class="chat-container">
-            {#each messages as message (message.id)}
-              <div class="chat chat-start py-2">
-                <div class="chat-image avatar">
-                  <div class="w-10 rounded-full">
-                    <img
-                      src={getUserById(message.userId)?.avatar}
-                      alt={getUserById(message.userId)?.username}
-                    />
+            <div class="messages-container">
+              {#each messages as message (message.id)}
+                <div class="chat chat-start py-2">
+                  <div class="chat-image avatar">
+                    <div class="w-10 rounded-full">
+                      <img
+                        src={getUserById(message.userId)?.avatar}
+                        alt={getUserById(message.userId)?.username}
+                      />
+                    </div>
                   </div>
+                  <div class="chat-header pb-1">
+                    {getUserById(message.userId)?.username}
+                    <time class="text-xs opacity-50"
+                      >{formatDate(message.createdAt)}</time
+                    >
+                  </div>
+                  <div class="chat-bubble">{message.text}</div>
                 </div>
-                <div class="chat-header pb-1">
-                  {getUserById(message.userId)?.username}
-                  <time class="text-xs opacity-50"
-                    >{formatDate(message.createdAt)}</time
-                  >
-                </div>
-                <div class="chat-bubble">{message.text}</div>
-              </div>
-            {/each}
-            <div id="message-end" />
+              {/each}
+              <div id="message-end" />
+            </div>
           </div>
 
           <div class="form-control w-full p-4 bg-base-200">
