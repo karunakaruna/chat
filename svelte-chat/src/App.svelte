@@ -680,6 +680,31 @@
         connected: "boolean - WebSocket connection status",
         cohered: "boolean - Active within timeout"
       }
+    },
+    Beacon: {
+      description: "A spatial marker that invites users to gather",
+      fields: {
+        id: "string (UUID) - Unique identifier",
+        creatorId: "string (UUID) - User who created the beacon",
+        position: "{ x: number, y: number } - Beacon coordinates",
+        createdAt: "string (ISO date) - Creation timestamp",
+        active: "boolean - Whether beacon is still active",
+        participants: "string[] - Array of user IDs who joined"
+      }
+    },
+    Trade: {
+      description: "A trade interaction between two users",
+      fields: {
+        id: "string (UUID) - Unique identifier",
+        initiatorId: "string (UUID) - User who started the trade",
+        acceptorId: "string (UUID) - User who accepted the trade invite",
+        state: "enum ('invited', 'rules_review', 'trading', 'completed', 'cancelled')",
+        position: "{ x: number, y: number } - Trade window position",
+        mousePositions: "{ [userId: string]: { x: number, y: number } } - Real-time cursor positions",
+        rulesAccepted: "{ [userId: string]: boolean } - Track who accepted rules",
+        createdAt: "string (ISO date) - Trade start timestamp",
+        updatedAt: "string (ISO date) - Last state change timestamp"
+      }
     }
   };
 
@@ -739,6 +764,191 @@
 
   const handleDragEnd = () => {
     isDragging = false;
+  };
+
+  // Add new state for beacons and trades
+  let activeBeacons: Map<string, typeof schemas.Beacon> = new Map();
+  let activeTrades: Map<string, typeof schemas.Trade> = new Map();
+
+  // Functions for beacon management
+  const createBeacon = (position: { x: number, y: number }) => {
+    const beacon = {
+      id: crypto.randomUUID(),
+      creatorId: user?.id,
+      position,
+      createdAt: new Date().toISOString(),
+      active: true,
+      participants: [user?.id]
+    };
+    activeBeacons.set(beacon.id, beacon);
+    // Trigger WebSocket sync
+    // ws.send(JSON.stringify({ type: 'beacon_created', data: beacon }));
+  };
+
+  // Functions for trade management
+  const initiateTrade = (position: { x: number, y: number }, targetUserId: string) => {
+    const trade = {
+      id: crypto.randomUUID(),
+      initiatorId: user?.id,
+      acceptorId: targetUserId,
+      state: 'invited',
+      position,
+      mousePositions: {},
+      rulesAccepted: { [user?.id]: false, [targetUserId]: false },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    activeTrades.set(trade.id, trade);
+    // Trigger WebSocket sync
+    // ws.send(JSON.stringify({ type: 'trade_initiated', data: trade }));
+  };
+
+  const updateTradeMousePosition = (tradeId: string, position: { x: number, y: number }) => {
+    const trade = activeTrades.get(tradeId);
+    if (trade) {
+      trade.mousePositions[user?.id] = position;
+      trade.updatedAt = new Date().toISOString();
+      activeTrades.set(trade.id, trade);
+      // Trigger WebSocket sync
+      // ws.send(JSON.stringify({ 
+      //   type: 'trade_mouse_update', 
+      //   data: { tradeId, userId: user?.id, position } 
+      // }));
+    }
+  };
+
+  const acceptTradeRules = (tradeId: string) => {
+    const trade = activeTrades.get(tradeId);
+    if (trade) {
+      trade.rulesAccepted[user?.id] = true;
+      trade.updatedAt = new Date().toISOString();
+      if (Object.values(trade.rulesAccepted).every(accepted => accepted)) {
+        trade.state = 'trading';
+      }
+      activeTrades.set(trade.id, trade);
+      // Trigger WebSocket sync
+      // ws.send(JSON.stringify({ 
+      //   type: 'trade_rules_accepted', 
+      //   data: { tradeId, userId: user?.id } 
+      // }));
+    }
+  };
+
+  // Add context menu state
+  let contextMenu = {
+    visible: false,
+    x: 0,
+    y: 0,
+    targetUserId: null as string | null
+  };
+
+  // Handle right click on map
+  const handleContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    const target = e.target as HTMLElement;
+    const userElement = target.closest('[data-user-id]');
+    
+    contextMenu = {
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      targetUserId: userElement?.getAttribute('data-user-id') || null
+    };
+  };
+
+  // Hide context menu when clicking outside
+  const handleClick = (e: MouseEvent) => {
+    if (contextMenu.visible) {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.context-menu')) {
+        contextMenu.visible = false;
+      }
+    }
+  };
+
+  // WebSocket message handlers
+  const handleWebSocketMessage = (event: MessageEvent) => {
+    const message = JSON.parse(event.data);
+    
+    switch (message.type) {
+      case 'beacon_created':
+        activeBeacons.set(message.data.id, message.data);
+        activeBeacons = activeBeacons;
+        logDebug('beacon', `Beacon created by ${users.get(message.data.creatorId)?.username}`, message.data);
+        break;
+
+      case 'beacon_joined':
+        const beacon = activeBeacons.get(message.data.beaconId);
+        if (beacon) {
+          beacon.participants.push(message.data.userId);
+          activeBeacons.set(beacon.id, beacon);
+          activeBeacons = activeBeacons;
+          logDebug('beacon', `${users.get(message.data.userId)?.username} joined beacon`, message.data);
+        }
+        break;
+
+      case 'trade_initiated':
+        activeTrades.set(message.data.id, message.data);
+        activeTrades = activeTrades;
+        logDebug('trade', `Trade initiated between ${users.get(message.data.initiatorId)?.username} and ${users.get(message.data.acceptorId)?.username}`, message.data);
+        if (message.data.acceptorId === user?.id) {
+          logDebug('system', `Received trade request from ${users.get(message.data.initiatorId)?.username}`);
+        }
+        break;
+
+      // ... existing message handlers ...
+    }
+  };
+
+  // Join beacon function
+  const joinBeacon = (beaconId: string) => {
+    const beacon = activeBeacons.get(beaconId);
+    if (beacon && !beacon.participants.includes(user?.id)) {
+      ws.send(JSON.stringify({
+        type: 'beacon_joined',
+        data: { beaconId, userId: user?.id }
+      }));
+    }
+  };
+
+  // Cancel trade function
+  const cancelTrade = (tradeId: string) => {
+    ws.send(JSON.stringify({
+      type: 'trade_cancelled',
+      data: { tradeId }
+    }));
+    activeTrades.delete(tradeId);
+    activeTrades = activeTrades;
+  };
+
+  // Debug logging system
+  interface DebugEvent {
+    id: string;
+    type: 'beacon' | 'trade' | 'system' | 'error';
+    message: string;
+    timestamp: string;
+    details?: any;
+  }
+
+  const debugTimeline = writable<DebugEvent[]>([]);
+  let showDebugPanel = true;
+
+  const logDebug = (type: DebugEvent['type'], message: string, details?: any) => {
+    debugTimeline.update(events => {
+      const newEvent = {
+        id: crypto.randomUUID(),
+        type,
+        message,
+        timestamp: new Date().toISOString(),
+        details
+      };
+      // Keep last 100 events
+      return [...events.slice(-99), newEvent];
+    });
+  };
+
+  const toggleDebugPanel = () => {
+    showDebugPanel = !showDebugPanel;
   };
 </script>
 
@@ -1279,6 +1489,248 @@
     background: #e5e7eb;
     color: #374151;
   }
+
+  .beacon {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(59, 130, 246, 0.5);
+    border: 2px solid #3b82f6;
+    animation: pulse 2s infinite;
+    transform: translate(-50%, -50%);
+    cursor: pointer;
+  }
+
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+    70% { box-shadow: 0 0 0 20px rgba(59, 130, 246, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+  }
+
+  .trade-window {
+    position: absolute;
+    width: 600px;
+    height: 400px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .trade-header {
+    padding: 1rem;
+    background: #f9fafb;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .trade-content {
+    flex: 1;
+    display: flex;
+    padding: 1rem;
+  }
+
+  .trade-rules {
+    width: 200px;
+    padding: 1rem;
+    background: #f3f4f6;
+    border-radius: 4px;
+    font-size: 0.875rem;
+  }
+
+  .trade-area {
+    flex: 1;
+    position: relative;
+    margin-left: 1rem;
+  }
+
+  .trade-cursor {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+
+  .trade-cursor.initiator {
+    background: #3b82f6;
+  }
+
+  .trade-cursor.acceptor {
+    background: #10b981;
+  }
+
+  .trade-footer {
+    padding: 1rem;
+    background: #f9fafb;
+    border-top: 1px solid #e5e7eb;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  .context-menu {
+    position: fixed;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 0.5rem;
+    min-width: 160px;
+    z-index: 1000;
+  }
+
+  .context-menu-item {
+    padding: 0.5rem;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #374151;
+    font-size: 0.875rem;
+  }
+
+  .context-menu-item:hover {
+    background: #f3f4f6;
+  }
+
+  .context-menu-item.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .context-menu-separator {
+    height: 1px;
+    background: #e5e7eb;
+    margin: 0.5rem 0;
+  }
+
+  .context-menu-icon {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6b7280;
+  }
+
+  .debug-panel {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 300px;
+    background: #1a1a1a;
+    color: #e5e7eb;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.3s ease;
+    z-index: 100;
+  }
+
+  .debug-panel.hidden {
+    transform: translateX(-100%);
+  }
+
+  .debug-header {
+    padding: 0.75rem;
+    background: #2d2d2d;
+    border-bottom: 1px solid #404040;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .debug-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #10b981;
+  }
+
+  .debug-timeline {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem;
+  }
+
+  .debug-event {
+    margin-bottom: 0.5rem;
+    padding: 0.5rem;
+    background: #2d2d2d;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.75rem;
+  }
+
+  .debug-event-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+  }
+
+  .debug-event-type {
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-size: 0.625rem;
+    text-transform: uppercase;
+  }
+
+  .debug-event-type.beacon { background: #3b82f6; color: white; }
+  .debug-event-type.trade { background: #10b981; color: white; }
+  .debug-event-type.system { background: #6b7280; color: white; }
+  .debug-event-type.error { background: #ef4444; color: white; }
+
+  .debug-event-time {
+    color: #6b7280;
+    font-size: 0.625rem;
+  }
+
+  .debug-event-message {
+    color: #e5e7eb;
+  }
+
+  .debug-event-details {
+    margin-top: 0.25rem;
+    padding: 0.25rem;
+    background: #404040;
+    border-radius: 2px;
+    font-size: 0.625rem;
+    color: #d1d5db;
+    white-space: pre-wrap;
+    overflow-x: auto;
+  }
+
+  .debug-toggle {
+    position: fixed;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    background: #2d2d2d;
+    color: #10b981;
+    border: none;
+    border-radius: 0 4px 4px 0;
+    padding: 0.5rem;
+    cursor: pointer;
+    z-index: 101;
+  }
+
+  /* Adjust main layout for debug panel */
+  main {
+    padding-left: var(--debug-panel-width, 0px);
+  }
+
+  :global(body) {
+    --debug-panel-width: 300px;
+  }
 </style>
 
 <main>
@@ -1318,7 +1770,8 @@
         tabindex="0"
         on:focus={handleGameFocus}
         on:blur={handleGameBlur}
-        on:click={handleGameClick}
+        on:click={handleClick}
+        on:contextmenu={handleContextMenu}
         on:mousemove={handleMouseMove}
         class:has-focus={gameHasFocus}
       >
@@ -1358,7 +1811,103 @@
             </div>
           {/each}
         </div>
+
+        {#each Array.from(activeBeacons.values()) as beacon}
+          {#if beacon.active}
+            <div 
+              class="beacon" 
+              style="left: {beacon.position.x}px; top: {beacon.position.y}px"
+              title="{users.get(beacon.creatorId)?.username}'s beacon"
+            />
+          {/if}
+        {/each}
+
+        {#each Array.from(activeTrades.values()) as trade}
+          {#if trade.initiatorId === user?.id || trade.acceptorId === user?.id}
+            <div class="trade-window" style="left: {trade.position.x}px; top: {trade.position.y}px">
+              <div class="trade-header">
+                <div>Trade with {users.get(trade.initiatorId === user?.id ? trade.acceptorId : trade.initiatorId)?.username}</div>
+                <div>Status: {trade.state}</div>
+              </div>
+              <div class="trade-content">
+                <div class="trade-rules">
+                  <h3>Trade Rules</h3>
+                  <ul>
+                    <li>Both users must accept the rules</li>
+                    <li>Items can be dragged between inventories</li>
+                    <li>Both users must confirm to complete trade</li>
+                  </ul>
+                  {#if !trade.rulesAccepted[user?.id]}
+                    <button on:click={() => acceptTradeRules(trade.id)}>Accept Rules</button>
+                  {/if}
+                </div>
+                <div class="trade-area" on:mousemove={e => updateTradeMousePosition(trade.id, { x: e.offsetX, y: e.offsetY })}>
+                  {#each Object.entries(trade.mousePositions) as [userId, pos]}
+                    <div 
+                      class="trade-cursor {userId === trade.initiatorId ? 'initiator' : 'acceptor'}"
+                      style="left: {pos.x}px; top: {pos.y}px"
+                    />
+                  {/each}
+                </div>
+              </div>
+              <div class="trade-footer">
+                {#if trade.state === 'trading'}
+                  <button>Confirm Trade</button>
+                {/if}
+                <button on:click={() => cancelTrade(trade.id)}>Cancel Trade</button>
+              </div>
+            </div>
+          {/if}
+        {/each}
       </div>
+
+      {#if contextMenu.visible}
+        <div 
+          class="context-menu"
+          style="left: {contextMenu.x}px; top: {contextMenu.y}px"
+        >
+          <div 
+            class="context-menu-item"
+            on:click={() => {
+              createBeacon({ x: contextMenu.x, y: contextMenu.y });
+              contextMenu.visible = false;
+            }}
+          >
+            <span class="context-menu-icon">📍</span>
+            Set Beacon
+          </div>
+
+          {#if contextMenu.targetUserId && contextMenu.targetUserId !== user?.id}
+            <div class="context-menu-separator" />
+            <div 
+              class="context-menu-item"
+              on:click={() => {
+                initiateTrade({ x: contextMenu.x, y: contextMenu.y }, contextMenu.targetUserId);
+                contextMenu.visible = false;
+              }}
+            >
+              <span class="context-menu-icon">🤝</span>
+              Trade with {users.get(contextMenu.targetUserId)?.username}
+            </div>
+          {/if}
+
+          {#each Array.from(activeBeacons.values()) as beacon}
+            {#if beacon.active && !beacon.participants.includes(user?.id)}
+              <div class="context-menu-separator" />
+              <div 
+                class="context-menu-item"
+                on:click={() => {
+                  joinBeacon(beacon.id);
+                  contextMenu.visible = false;
+                }}
+              >
+                <span class="context-menu-icon">➡️</span>
+                Join {users.get(beacon.creatorId)?.username}'s Beacon
+              </div>
+            {/if}
+          {/each}
+        </div>
+      {/if}
 
       <div class="user-list-panel" class:visible={$chatVisible}>
         <!-- HUD Display -->
@@ -1528,4 +2077,37 @@
       </div>
     {/if}
   </div>
+
+  <div class="debug-panel" class:hidden={!showDebugPanel}>
+    <div class="debug-header">
+      <div class="debug-title">Debug Timeline</div>
+      <button on:click={toggleDebugPanel}>×</button>
+    </div>
+    <div class="debug-timeline">
+      {#each $debugTimeline as event (event.id)}
+        <div class="debug-event">
+          <div class="debug-event-header">
+            <span class="debug-event-type {event.type}">{event.type}</span>
+            <span class="debug-event-time">
+              {new Date(event.timestamp).toLocaleTimeString()}
+            </span>
+          </div>
+          <div class="debug-event-message">{event.message}</div>
+          {#if event.details}
+            <div class="debug-event-details">
+              {JSON.stringify(event.details, null, 2)}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  </div>
+
+  <button 
+    class="debug-toggle" 
+    on:click={toggleDebugPanel}
+    style="left: {showDebugPanel ? '300px' : '0'}"
+  >
+    {showDebugPanel ? '◀' : '▶'}
+  </button>
 </main>
